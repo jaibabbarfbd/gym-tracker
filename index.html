@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07080a">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Workouts with progressive overload, diet, water, steps, supplements and gym fees, with friends' streaks.">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Gym Tracker">
+  <title>Gym Tracker</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preload" href="fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img src="icons/icon.svg" alt="" width="28" height="28"> Gym Tracker</div>
+    <button class="profile-chip" id="profile-chip" data-action="open-friends" aria-label="Your streak and friends" hidden></button>
+  </header>
+
+  <main id="view"></main>
+
+  <div class="live" id="live" aria-live="polite" hidden></div>
+
+  <nav class="tabs" id="tabs" hidden>
+    <button data-action="tab" data-tab="today">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Today
+    </button>
+    <button data-action="tab" data-tab="diet">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v7a2 2 0 0 0 2 2v9M10 3v7a2 2 0 0 1-2 2M8 3v6M18 21V3c-2.5 1-4 4-4 8v3h4"/></svg>Diet
+    </button>
+    <button data-action="tab" data-tab="workout">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5v11M3.5 9v6M17.5 6.5v11M20.5 9v6M6.5 12h11"/></svg>Workout
+    </button>
+    <button data-action="tab" data-tab="supps">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 20.5a5 5 0 0 1-7-7l7-7a5 5 0 0 1 7 7z"/><path d="M8.5 8.5l7 7"/></svg>Supps
+    </button>
+    <button data-action="tab" data-tab="more">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>More
+    </button>
+  </nav>
+
+  <div class="sheet-backdrop" id="sheet" hidden>
+    <div class="sheet" role="dialog" aria-modal="true"></div>
+  </div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/logic.js"></script>
+  <script src="js/sync.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
