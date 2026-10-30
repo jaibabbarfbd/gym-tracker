@@ -1,5 +1,5 @@
 // Offline support + opening the app when a reminder notification is tapped.
-const CACHE = 'gymtracker-v8';
+const CACHE = 'gymtracker-v9';
 const ASSETS = [
   './',
   'index.html',
@@ -7,6 +7,7 @@ const ASSETS = [
   'js/data.js',
   'js/logic.js',
   'js/sync.js',
+  'js/native.js',
   'js/app.js',
   'manifest.webmanifest',
   'icons/icon.svg',

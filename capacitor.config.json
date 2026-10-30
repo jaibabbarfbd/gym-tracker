@@ -1,0 +1,18 @@
+{
+  "appId": "com.jaibabbar.gymtracker",
+  "appName": "Gym Tracker",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#07080a"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_dumbbell",
+      "iconColor": "#c8f53c"
+    },
+    "SystemBars": {
+      "style": "DARK",
+      "initialViewportFitValueHint": "cover"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# Dependencies and generated web bundle
+node_modules/
+www/
+
+# Android signing (never commit)
+*.jks
+*.keystore
+*.p12
+keystore.properties

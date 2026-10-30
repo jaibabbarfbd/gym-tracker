@@ -276,8 +276,9 @@
   // Bluetooth Heart Rate Measurement (0x2A37): a flags byte, then bpm as uint8 or uint16.
   const parseHeartRate = (view) => (view.getUint8(0) & 1 ? view.getUint16(1, true) : view.getUint8(1));
 
-  // Phone and watch counts overlap, so the day's total is whichever is higher, never the sum.
-  const stepsTotal = (rec) => Math.max(rec?.phone || 0, rec?.manual || 0);
+  // Every source (phone motion, watch typed in, Health Connect, live while open) counts the same
+  // steps, so the day's total is whichever is highest, never the sum.
+  const stepsTotal = (rec) => Math.max(rec?.phone || 0, rec?.manual || 0, rec?.health || 0, rec?.live || 0);
 
   // ---------- Reminders ----------
   // Next "drink water" nudge: `every` minutes after the latest of the last drink,
@@ -440,6 +441,39 @@
     };
   }
 
+  // Android notifications to schedule (app): water every day, each supplement dose for the next
+  // 7 days (skipping doses already ticked off today), and the gym-fee dates. `at` is in ms.
+  function nativeReminders(p, now) {
+    const out = [];
+    const t = ymd(new Date(now));
+    const r = p.waterRem;
+    if (r.on) {
+      const end = hmToMin(r.to);
+      for (let m = hmToMin(r.from) + r.every, i = 0; m <= end && i < 40; m += r.every, i++) {
+        out.push({ id: 1000 + i, title: 'Drink water 💧', body: `Daily goal: ${fmtL(p.goals.water)} L`, hour: Math.floor(m / 60), minute: m % 60 });
+      }
+    }
+    let id = 2000;
+    for (const { supp, slot } of suppSlots(p.supps)) {
+      if (!slot) continue;
+      for (let d = 0; d < 7; d++) {
+        const date = addDays(t, d);
+        const at = atTime(slot, parseYmd(date).getTime());
+        if (at <= now || (d === 0 && findTaken(p.suppLog, supp.id, slot, date))) continue;
+        out.push({ id: id++, title: `Take your ${supp.name} 💊`, body: supp.dose ? `${supp.dose} · ${fmt12(slot)}` : fmt12(slot), at });
+      }
+    }
+    const m = p.membership;
+    if (m.end) {
+      const nine = (date) => atTime('09:00', parseYmd(date).getTime());
+      const warn = addDays(m.end, -(m.warnDays ?? 3));
+      const fee = m.fee ? ` Fee: ${m.fee}.` : '';
+      if (warn < m.end && nine(warn) > now) out.push({ id: 3000, title: 'Gym fees due soon 💳', body: `Membership ends ${fmtDate(m.end)}.${fee}`, at: nine(warn) });
+      if (nine(m.end) > now) out.push({ id: 3001, title: 'Gym membership ends today 💳', body: `Time to pay your gym fees.${fee}`, at: nine(m.end) });
+    }
+    return out;
+  }
+
   // ---------- Calendar export ----------
   const icsText = (s) => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
   function icsFold(line) {
@@ -493,7 +527,7 @@
     ymd, parseYmd, addDays, addMonths, daysBetween, hmToMin, atTime, fmtDate, relDay, fmtClock, fmt12, fmtW, fmtL, fmtDur, parseDur, round2,
     dayTotals, savedFoods,
     exerciseCfg, isForTime, lastSession, overloadTargets, bestSet, bestTimed, repsAtWeight, e1rm, personalBests, compareSet,
-    createStepDetector, parseHeartRate, stepsTotal,
+    createStepDetector, parseHeartRate, stepsTotal, nativeReminders,
     waterReminder, suppSlots, findTaken, membershipStatus, buildICS,
     sha256Hex, makePassword, checkPassword,
     newSyncCode, normalizeSyncCode, syncTopic, workoutPayload, parseWorkoutPayload, statusPayload, parseStatus,

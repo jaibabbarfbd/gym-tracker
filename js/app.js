@@ -80,6 +80,7 @@
     } catch (e) {
       toast('Could not save. Is browser storage full or blocked?');
     }
+    queueNativeReminders(); // app: keep Android's scheduled reminders in step with the data
   }
 
   let db = loadDb();
@@ -89,12 +90,16 @@
     foodCat: 'All', foodPick: null, foodQty: 1,
     unlocked: new Set(), hiddenAt: 0,
     friendsAt: 0, friendsBusy: false, // last time friends' statuses were fetched
+    health: 'unknown', // app: Health Connect step access ('granted' | 'not-granted' | 'unavailable')
+    nativeNotif: 'default', // app: Android notification permission, in notifState() terms
   };
   let installEvt = null;
   let wakeLock = null;
   // Phone step counting (works only while the app is open) and a Bluetooth heart-rate watch.
   const pedo = { on: false, push: null, session: 0, pid: null, gotData: false, lastSave: 0 };
   const hrm = { device: null, status: 'off', bpm: 0, name: '', pid: null, lastSave: 0 };
+  // App only: steps counted live while open, on top of Health Connect's last number (`base`).
+  const live = { on: false, push: null, day: '', base: 0, extra: 0, lastSave: 0 };
 
   // ---------- Helpers ----------
   const $ = (s, el = document) => el.querySelector(s);
@@ -141,7 +146,8 @@
   const waterOn = (p, d) => p.water.filter((w) => w.date === d).reduce((t, w) => t + w.ml, 0);
   const lastWaterTs = (p) => p.water.reduce((m, w) => Math.max(m, w.ts), 0);
   const isTyping = () => /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName || '');
-  const notifState = () => ('Notification' in window ? Notification.permission : 'unsupported');
+  // 'granted' | 'denied' | 'default' | 'unsupported'. The app uses Android notifications instead of the web ones.
+  const notifState = () => (GymNative.isNative ? ui.nativeNotif : 'Notification' in window ? Notification.permission : 'unsupported');
   const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
   const buzz = (pattern = 10) => {
     if (navigator.userActivation?.hasBeenActive === false) return;
@@ -180,7 +186,7 @@
   }
 
   function installBanner() {
-    if (db.hideInstall || isStandalone()) return '';
+    if (db.hideInstall || isStandalone() || GymNative.isNative) return '';
     const dismiss = '<button class="icon-btn small" data-action="hide-install" aria-label="Dismiss">✕</button>';
     if (installEvt) {
       return `<div class="banner info"><span>📲 Install Gym Tracker as an app</span>
@@ -271,21 +277,40 @@
     const goal = p.goals.steps;
     const left = goal - total;
     const counting = pedo.on && pedo.pid === p.id;
-    const source = rec.manual && rec.manual >= (rec.phone || 0) ? '⌚ From your watch / Health app'
-      : rec.phone ? '👟 Counted by phone' : '';
+    // Name whichever source gives today's number.
+    const top = Math.max(rec.manual || 0, rec.phone || 0, rec.health || 0, rec.live || 0);
+    const source = !top ? ''
+      : top === (rec.manual || 0) ? '⌚ From your watch / Health app'
+      : top === (rec.health || 0) || top === (rec.live || 0) ? `📲 Health Connect${live.on ? ' · live' : ''}`
+      : '👟 Counted by phone';
     const week = Array.from({ length: 7 }, (_, i) => L.addDays(t, i - 6)).map((d) => ({ d, n: L.stepsTotal(p.steps[d]) })).filter((x) => x.n);
     const best = week.reduce((a, b) => (b.n > (a?.n || 0) ? b : a), null);
     const avg = week.length ? week.reduce((s, x) => s + x.n, 0) / week.length : 0;
+    const watchBtn = '<button class="btn" data-action="steps-manual">⌚ Enter from watch</button>';
+    let actions;
+    if (GymNative.isNative && ui.health === 'granted') {
+      // App: Health Connect counts all day, even with the app closed; live counting adds to it while open.
+      actions = `<p class="counting"><span class="dot"></span><span>Counting all day from Health Connect${live.on ? ', live while the app is open' : ''}.</span></p>
+        <div class="row steps-actions">${watchBtn}<button class="btn" data-action="health-settings">Health Connect settings</button></div>`;
+    } else if (GymNative.isNative && ui.health !== 'unavailable') {
+      actions = `<div class="row steps-actions"><button class="btn primary" data-action="health-connect">📲 Turn on all-day steps</button>${watchBtn}</div>
+        <p class="muted small week-steps">Reads your steps from Health Connect, which keeps counting with the app closed.</p>`;
+    } else {
+      const note = GymNative.isNative
+        ? '<p class="muted small week-steps">For all-day steps, install or update <b>Health Connect</b> from the Play Store, then reopen the app.</p>'
+        : '';
+      actions = `${counting ? `<p class="counting"><span class="dot"></span><span>Counting… <b>${fmtInt(pedo.session)}</b> steps this walk. Keep the app open (in your hand or pocket); the screen stays on.</span></p>` : ''}
+        <div class="row steps-actions">
+          <button class="btn ${counting ? 'stop' : 'primary'}" data-action="pedo-toggle">${counting ? '⏹ Stop counting' : '👟 Count with phone'}</button>
+          ${watchBtn}
+        </div>${note}`;
+    }
     return `<section class="card" id="steps-card">
       <div class="card-head"><h2>Steps</h2><span class="muted small">${source}</span></div>
       <div class="water-amount"><b>${fmtInt(total)}</b> / ${fmtInt(goal)}</div>
       <div class="bar steps"><span style="width:${Math.min(100, (total / goal) * 100)}%"></span></div>
       <div class="muted small">${left > 0 ? `${fmtInt(left)} to go` : 'Goal hit 💪'} · about ${L.round2((total * 0.75) / 1000)} km</div>
-      ${counting ? `<p class="counting"><span class="dot"></span><span>Counting… <b>${fmtInt(pedo.session)}</b> steps this walk. Keep the app open (in your hand or pocket); the screen stays on.</span></p>` : ''}
-      <div class="row steps-actions">
-        <button class="btn ${counting ? 'stop' : 'primary'}" data-action="pedo-toggle">${counting ? '⏹ Stop counting' : '👟 Count with phone'}</button>
-        <button class="btn" data-action="steps-manual">⌚ Enter from watch</button>
-      </div>
+      ${actions}
       ${week.length > 1 ? `<p class="muted small week-steps">Last 7 days: avg ${fmtInt(avg)} · best ${fmtInt(best.n)} (${L.fmtDate(best.d).slice(0, 3)})</p>` : ''}
     </section>`;
   }
@@ -304,6 +329,10 @@
   }
 
   function watchSection() {
+    if (GymNative.isNative) {
+      return `<p class="muted small">Steps from a watch arrive automatically when its app syncs to Health Connect (e.g. Samsung Health, Fitbit, Google Fit). For other watches, use <b>⌚ Enter from watch</b> on the Today screen.</p>
+        <p class="muted small">Live heart rate over Bluetooth works in the web version: open the app's website in Chrome.</p>`;
+    }
     const status = {
       off: 'Not connected.',
       connecting: `Connecting to ${esc(hrm.name)}…`,
@@ -813,8 +842,8 @@
   function notifSection() {
     const s = notifState();
     const status = {
-      granted: '✅ Notifications are on.',
-      denied: '🚫 Notifications are blocked. Allow them in your browser\'s site settings.',
+      granted: GymNative.isNative ? '✅ Notifications are on. Reminders fire even with the app closed.' : '✅ Notifications are on.',
+      denied: GymNative.isNative ? '🚫 Notifications are blocked. Allow them in Android Settings → Apps → Gym Tracker → Notifications.' : '🚫 Notifications are blocked. Allow them in your browser\'s site settings.',
       default: '🔕 Notifications are off.',
       unsupported: '⚠️ This browser can\'t show notifications. On iPhone, add the app to your Home Screen first (Share → Add to Home Screen).',
     }[s];
@@ -1179,6 +1208,11 @@
   }
 
   function download(name, text, type) {
+    // The app can't download into the browser's folder: hand the file to the Android share sheet.
+    if (GymNative.isNative) {
+      GymNative.shareFile(name, text).catch(() => toast('Couldn\'t share the file.'));
+      return;
+    }
     const url = URL.createObjectURL(new Blob([text], { type }));
     const a = Object.assign(document.createElement('a'), { href: url, download: name });
     document.body.appendChild(a);
@@ -1335,7 +1369,9 @@
     const p = me();
     if (!p || document.hidden) return;
     if (p.friendCode) publishNow();
-    if (p.friends.length && !isLocked(p) && (ui.tab === 'today' || ui.tab === 'workout') && Date.now() - ui.friendsAt > 120000) pollFriends();
+    // Sooner while a synced friend's workout is on screen, so their card updates by itself.
+    const maxAge = ui.tab === 'workout' && p.follow ? 15000 : 120000;
+    if (p.friends.length && !isLocked(p) && (ui.tab === 'today' || ui.tab === 'workout') && Date.now() - ui.friendsAt > maxAge) pollFriends();
   }
 
   function ensureFriendCode(p) {
@@ -1394,7 +1430,9 @@
       const data = JSON.parse(await file.text());
       const backup = (data.profiles || []).filter((x) => x && x.id && x.name).map(normalizeProfile)[0];
       if (!backup) throw new Error('no profile');
-      const when = /^\d{4}-\d{2}-\d{2}/.test(data.exported || '') ? ` from ${L.fmtDate(data.exported.slice(0, 10))}` : '';
+      // The export time is stored in UTC; show the backup's date in local time.
+      const exported = new Date(data.exported);
+      const when = isNaN(exported) ? '' : ` from ${L.fmtDate(L.ymd(exported))}`;
       if (!confirm(`Restore the backup of ${backup.name}${when}?\nThis replaces the data in the app on this phone.`)) return;
       // Restoring replaces you; a password-protected backup asks for its password.
       const current = me();
@@ -1414,6 +1452,10 @@
   async function notify(title, body, tag) {
     toast(`<b>${esc(title)}</b><br>${esc(body)}`, 6000);
     if (notifState() !== 'granted') return;
+    if (GymNative.isNative) {
+      GymNative.notifyAt(900100, title, body, new Date(Date.now() + 1000)).catch(() => {});
+      return;
+    }
     const opts = { body, tag, renotify: true, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', vibrate: [120, 60, 120] };
     try {
       const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
@@ -1424,13 +1466,107 @@
 
   async function enableNotifs() {
     if (notifState() === 'unsupported') return toast('This browser can\'t show notifications.');
-    const res = await Notification.requestPermission();
+    let res;
+    if (GymNative.isNative) {
+      ui.nativeNotif = nativePerm(await GymNative.notifPermission(true));
+      res = ui.nativeNotif;
+      queueNativeReminders(true);
+    } else {
+      res = await Notification.requestPermission();
+    }
     render();
     if (res === 'granted') notify('Reminders are on 💪', 'You\'ll get nudges for water, supplements and gym fees.', 'welcome');
   }
 
+  // ---------- App (Android) ----------
+  const nativePerm = (s) => (s === 'granted' ? 'granted' : s === 'denied' ? 'denied' : s === 'unsupported' ? 'unsupported' : 'default');
+
+  // Android schedules the reminders itself, so they fire with the app closed. Recomputed after
+  // every save; only sent to Android when the list actually changes.
+  let reminderTimer = null;
+  let remindersSent = '';
+  function queueNativeReminders(force) {
+    if (!GymNative.isNative || ui.nativeNotif !== 'granted') return;
+    clearTimeout(reminderTimer);
+    reminderTimer = setTimeout(async () => {
+      const p = me();
+      const list = p ? L.nativeReminders(p, Date.now()) : [];
+      const key = JSON.stringify(list);
+      if (!force && key === remindersSent) return;
+      try {
+        await GymNative.setReminders(list.map((r) => (r.at ? { ...r, at: new Date(r.at) } : r)));
+        remindersSent = key;
+      } catch (e) { /* tried again on the next change */ }
+    }, 1000);
+  }
+
+  // Today's steps from Health Connect. Steps counted live since the last reading stay on top
+  // until Health Connect catches up.
+  async function refreshHealth() {
+    if (!GymNative.isNative || ui.health !== 'granted') return;
+    let n;
+    try {
+      n = await GymNative.stepsToday();
+    } catch (e) {
+      return;
+    }
+    const p = me();
+    if (!p) return;
+    const t = today();
+    const rec = p.steps[t] || (p.steps[t] = {});
+    rec.health = n;
+    if (live.day !== t || n >= live.base + live.extra) Object.assign(live, { day: t, base: n, extra: 0 });
+    rec.live = live.base + live.extra;
+    save();
+    updateLive();
+  }
+
+  function onLiveMotion(e) {
+    const a = e.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    const n = live.push(a.x, a.y, a.z, e.timeStamp || performance.now());
+    const p = n && me();
+    if (!p) return;
+    const t = today();
+    if (live.day !== t) Object.assign(live, { day: t, base: 0, extra: 0 }); // just past midnight
+    live.extra += n;
+    const rec = p.steps[t] || (p.steps[t] = {});
+    rec.live = live.base + live.extra;
+    if (Date.now() - live.lastSave > 10000) {
+      live.lastSave = Date.now();
+      save();
+    }
+    updateLive();
+  }
+
+  // While the app is open, the phone's motion sensor adds steps right away.
+  function startLive() {
+    if (live.on || !GymNative.isNative || ui.health !== 'granted' || document.hidden || !('DeviceMotionEvent' in window)) return;
+    Object.assign(live, { on: true, push: L.createStepDetector() });
+    window.addEventListener('devicemotion', onLiveMotion);
+  }
+  function stopLive() {
+    if (!live.on) return;
+    live.on = false;
+    window.removeEventListener('devicemotion', onLiveMotion);
+    save();
+  }
+
+  async function initNative() {
+    if (!GymNative.isNative) return;
+    ui.nativeNotif = nativePerm(await GymNative.notifPermission(false));
+    ui.health = await GymNative.stepsAccess();
+    if (ui.health === 'granted') {
+      await refreshHealth();
+      startLive();
+    }
+    queueNativeReminders(true);
+    if (!isTyping() && $('#sheet').hidden) render();
+  }
+
   // Runs every 30 s; each reminder fires once.
   function checkReminders() {
+    if (GymNative.isNative) return; // the app schedules them with Android instead
     const now = Date.now();
     const t = L.ymd();
     const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
@@ -1707,6 +1843,23 @@
     'steps-manual'() {
       openSheet(stepsSheet(me()));
     },
+    async 'health-connect'() {
+      const res = await GymNative.requestSteps();
+      ui.health = res === 'unsupported' ? 'unavailable' : res;
+      if (res === 'granted') {
+        await refreshHealth();
+        startLive();
+        toast('📲 All-day steps are on');
+      } else if (res === 'unavailable') {
+        toast('Health Connect isn\'t available. Install or update "Health Connect" from the Play Store.');
+      } else {
+        toast('Steps access wasn\'t allowed. You can turn it on in Health Connect settings.');
+      }
+      render();
+    },
+    'health-settings'() {
+      GymNative.openHealthSettings();
+    },
     'hr-connect'() {
       connectWatch();
     },
@@ -1852,7 +2005,9 @@
       const { friendCode } = me();
       const link = location.protocol === 'https:' ? `\n${location.origin}${location.pathname}` : '';
       const text = `Add me on Gym Tracker to see each other's streaks: open the app → Friends → enter my code ${friendCode}${link}`;
-      if (navigator.share) {
+      if (GymNative.isNative) {
+        GymNative.shareText(text).catch(() => {});
+      } else if (navigator.share) {
         try { await navigator.share({ text }); } catch (e) { /* share sheet closed */ }
       } else {
         ACTIONS['code-copy']();
@@ -2200,11 +2355,16 @@
     if (document.hidden) {
       ui.hiddenAt = Date.now();
       if (pedo.on || hrm.status !== 'off') save(); // steps and heart rate are saved in batches
+      stopLive();
       return;
     }
     if (ui.hiddenAt && Date.now() - ui.hiddenAt > AUTO_LOCK_MS) ui.unlocked.clear();
     checkReminders();
     syncTick();
+    // App: catch up on steps taken while it was closed, then count live again.
+    refreshHealth();
+    startLive();
+    queueNativeReminders();
     if (!isTyping() && $('#sheet').hidden) render();
     else updateWakeLock();
   });
@@ -2224,11 +2384,14 @@
   render();
   checkReminders();
   syncTick();
+  initNative();
   setInterval(() => {
     checkReminders();
     syncTick();
+    if (!document.hidden) refreshHealth();
   }, 30000);
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  // The app ships its files inside the APK, so only the website needs the offline cache.
+  if (!GymNative.isNative && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 })();

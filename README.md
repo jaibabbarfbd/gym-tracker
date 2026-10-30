@@ -1,6 +1,6 @@
-# GymBros Tracker
+# Gym Tracker
 
-A diet, water, workout, supplement and gym-fee tracker for two (or more) gym partners. It's plain HTML/CSS/JS with no build step and no dependencies. It works offline and can be installed on a phone like an app.
+A personal workout, diet, water, steps, supplement and gym-fee tracker, with friends' streaks and workout sync. It's plain HTML/CSS/JS with no build step and no dependencies. It works offline and can be installed on a phone like an app.
 
 ## What it does
 
@@ -9,7 +9,7 @@ A diet, water, workout, supplement and gym-fee tracker for two (or more) gym par
   - Or type any food in yourself. Foods you've logged before autofill and show up as one-tap "quick add" chips.
 - **Water**: +250 ml / +500 ml buttons, and a reminder every N minutes between the hours you choose.
 - **Steps**: daily step goal (default 10,000, change it in More), with distance and a 7-day average and best.
-  - **👟 Count with phone**: counts steps with the phone's motion sensor while GymBros is **open** (in your hand or pocket; the screen stays on). Phones stop this when the screen turns off or you switch apps, so it's for walks and runs, not all-day counting. On iPhone, allow motion access when asked.
+  - **👟 Count with phone**: counts steps with the phone's motion sensor while the app is **open** (in your hand or pocket; the screen stays on). Phones stop this when the screen turns off or you switch apps, so it's for walks and runs, not all-day counting. On iPhone, allow motion access when asked.
   - **⌚ Enter from watch**: type today's count from your watch's app or your phone's Health / Fit app. Phone and watch steps overlap, so the day uses whichever is **higher**, never the sum.
 - **⌚ Watch & heart rate** (More, or the link on the Workout tab): connects over Bluetooth to watches and chest straps that broadcast heart rate (Garmin "Broadcast heart rate", Polar, Coros, Amazfit / Mi Band "Heart rate sharing", most chest straps). It shows live bpm in a floating pill and on the Workout tab, reconnects if the watch drops out, and saves the day's average and max. Bluetooth works in **Chrome on Android, Windows and Mac only**; iPhone browsers don't support it. Watches don't share step counts with websites, which is why watch steps are typed in.
 - **Workout**: first pick the day: **💤 Rest day**, **🏋️ Strength** or **🔥 Hybrid (HYROX)**. You can pick it from the Today screen too.
@@ -23,30 +23,23 @@ A diet, water, workout, supplement and gym-fee tracker for two (or more) gym par
   - **Rest days**: a recovery card showing how much protein and water you still need today.
 - **Supplements**: pick from **40 supplements** (protein, performance, vitamins & minerals, Ayurvedic like ashwagandha and shilajit, gut/joints/sleep), each with a typical dose and suggested time, or add your own. Then a daily checklist, a 7-day log, and a "Take your creatine" notification if a dose isn't ticked off. Doses are typical label amounts: follow the product label or a doctor.
 - **Gym membership**: fee expiry date, a reminder N days before it expires, and "Mark fees paid", which extends it by your plan length and records the payment.
-- **Profiles**: one per person. Switch from the top-right chip, or with the Jai / Abhay toggle at the top of the Workout tab.
-- **Workout leader** 👑: exercises the leader adds (including custom ones and "repeat a recent workout") are added to everyone else's workout for that day too. Each person still gets their *own* last-time numbers and goals. If the leader removes an exercise, it's also removed for anyone who hasn't logged a set on it yet. The first profile created is the leader. Change it in **More → Workout leader**.
-- **Passwords** 🔒: each person can lock their profile in **More → Password**. A locked profile asks for the password when the app opens or when someone switches to it. It stays unlocked until the app is closed, 15 minutes in the background, or **Lock profiles now** (top-right chip).
 - **Phone-friendly**: +/− buttons for weight and reps (the weight button moves by the exercise's step), a vibration when a set is logged, the screen stays on while the Workout tab is open, the tab bar hides while the keyboard is up, and there's an install prompt on Android.
+- **App lock** 🔒 (optional, More → App lock): asks for your password when the app opens, or after 15 minutes in the background.
 
-### Syncing the workout between two phones
+### Friends: streaks and workout sync
 
-1. **Jai's phone**: More → *Sync between phones* → **I lead: create a sync code** → *Share code* (e.g. on WhatsApp).
-2. **Abhay's phone**: More → *Sync between phones* → type the code → **Join**. This is a one-time step.
-3. From then on, every exercise Jai adds or removes is sent automatically. On Abhay's Workout tab, a **👑 Jai's workout** card shows what Jai has planned and how many exercises are new. Tapping **⟳ Sync** pulls them in, in Jai's order, each with Abhay's **own** last-time numbers and goal.
+Tap the 🔥 chip at the top right (or **Friends →** on Today, or **More → Friends & workout sync**).
 
-Details:
-- Only Jai's day type (rest / strength / hybrid), exercise list for the day and Jai's name are sent: no sets, weights, meals, passwords or anything of Abhay's. Abhay's sets stay on Abhay's phone.
-- If Jai removes an exercise, the next sync removes it for Abhay too, unless Abhay already logged a set on it.
-- The data goes through [ntfy.sh](https://ntfy.sh), a free public message relay that needs no account. It's stored there for 12 hours under a topic named after your random sync code (only someone with the code can read it). While the app is open, Jai's phone re-sends the day's list every couple of hours so it doesn't expire mid-session. The relay code is all in `js/sync.js`, so it can be swapped for your own server or Firebase later.
-- Both phones need internet when sending and syncing. If Jai is offline, the send is retried automatically.
+- **Your streak** 🔥: days in a row with a workout logged (at least one set) or a day marked 💤 Rest. It stays alive until the end of tomorrow, so it isn't lost before today's session.
+- **Add a friend**: share your friend code (**Share code**), and type theirs into **Add**. Each of you then sees the other's streak and when they were last active, on the **Streaks** card on Today.
+- **👑 I lead workouts**: turn this on and the exercises you add each day are shared. A friend taps **⟳ Sync workout** next to your name, and their Workout tab shows a **👑 Your-name's workout** card. Tapping **⟳ Sync** copies your exercises in your order, with **their own** last-time numbers and goals. If you remove an exercise, their next sync removes it too, unless they already logged a set on it.
+- Only your name, your streak and, while leading, the day's exercise list are shared. Sets, weights, meals and everything else stay on your phone.
+- Sharing goes through [ntfy.sh](https://ntfy.sh), a free public message relay with no account, under a topic named after your random friend code (only someone with the code can read it). Messages are kept for 12 hours, and the app re-posts while it's open. Your friends' streaks stay correct even if they haven't opened the app for a while, because each status carries its date. The relay code is all in `js/sync.js`, so it can be swapped for your own server later.
+- Phones linked with a sync code in the earlier two-person version carry over automatically: the leader's code becomes their friend code with 👑 I lead on, and the other phone gets the leader as a friend.
 
-### Leader on one shared phone
+### App lock
 
-If both profiles live on the **same** phone, no code is needed: exercises the leader adds are filled straight into the other profile (More → *Workout leader (this phone)*).
-
-### Passwords
-
-The password is a privacy lock between gym partners, not bank-grade security. It's stored as a salted hash, never as plain text, but someone with technical skills and the unlocked phone could still dig the data out of the browser. A forgotten password can't be recovered. The only option is "Forgot password?", which deletes that profile.
+The password keeps others who use your phone out of your data, but it isn't bank-grade security. It's stored as a salted hash, never as plain text, but someone with technical skills and the unlocked phone could still dig the data out of the browser. A forgotten password can't be recovered: "Forgot password?" erases the app's data so you can start again.
 
 ### Progressive overload rules
 
@@ -63,7 +56,7 @@ You can change the range and step per exercise with **Rep range** on the exercis
 
 ## Run it on your PC
 
-Double-click **`Start GymBros.bat`** (needs [Node.js](https://nodejs.org)), or run:
+Double-click **`Start Gym Tracker.bat`** (needs [Node.js](https://nodejs.org)), or run:
 
 ```
 node server.js
@@ -82,7 +75,7 @@ Open the URL on each phone, then:
 - **Android (Chrome)**: menu ⋮ → *Add to Home screen* / *Install app*
 - **iPhone (Safari)**: Share → *Add to Home Screen*. iOS only allows notifications for home-screen apps.
 
-Then open the app, add your name, and tap **Enable** on the reminders banner.
+Then open the app, enter your name, and tap **Enable** on the reminders banner. To connect with friends, tap the 🔥 chip at the top right.
 
 ## How reminders work
 
@@ -91,10 +84,12 @@ Then open the app, add your name, and tap **Enable** on the reminders banner.
 
 ## Your data
 
-Everything is saved in the browser on each device (localStorage). Nothing is uploaded anywhere.
+Everything is saved in the browser on your phone (localStorage). Apart from the small friends status above, nothing is uploaded anywhere.
 
-- **More → Export my data** saves a backup `.json` of the profile that's open (only yours, never the other person's).
-- **More → Import file** loads one. Importing someone's export adds their profile (with its password, if any) to the phone. An import can't overwrite a profile that's currently locked.
+- **More → Export backup** saves a `.json` file of your data.
+- **More → Restore backup** replaces the app's data with a backup, e.g. on a new phone. The backup keeps your friend code and friends list, so friends stay connected. A password-protected backup asks for its password.
+- **More → Erase all my data** wipes the app on this phone.
+- If this phone still has a second person's data from the earlier two-person version, it's listed under Backup with **Export** and **Remove**.
 - Clearing the browser's site data deletes your logs, so export a backup now and then.
 
 ## Files
@@ -104,8 +99,8 @@ index.html             app shell
 css/style.css          styles (always-dark theme)
 fonts/                 Manrope font, stored with the app so it works offline (SIL Open Font License, see fonts/OFL.txt)
 js/data.js             exercise, Indian food and supplement lists
-js/logic.js            pure logic: overload targets, reminders, dates, calendar export
-js/sync.js             phone-to-phone workout sync (relay)
+js/logic.js            pure logic: overload targets, streaks, reminders, dates, calendar export
+js/sync.js             friends: sharing streaks and workouts (relay)
 js/app.js              UI, storage, notifications
 sw.js                  offline cache + notification taps
 manifest.webmanifest   install info
