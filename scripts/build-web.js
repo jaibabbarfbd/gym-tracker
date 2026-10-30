@@ -11,4 +11,12 @@ fs.rmSync(OUT, { recursive: true, force: true });
 for (const entry of ENTRIES) {
   fs.cpSync(path.join(ROOT, entry), path.join(OUT, entry), { recursive: true });
 }
-console.log(`Copied ${ENTRIES.length} entries to www/`);
+
+// Write version.json into www/ so the APK knows its own build number.
+// BUILD_NUMBER is set by the CI workflow (github.run_number); defaults to 0 locally.
+const buildNumber = parseInt(process.env.BUILD_NUMBER || '0', 10);
+const versionJson = JSON.stringify({ build: buildNumber });
+fs.writeFileSync(path.join(OUT, 'version.json'), versionJson);
+// Also write to root so GitHub Pages serves the latest version for update checks.
+fs.writeFileSync(path.join(ROOT, 'version.json'), versionJson);
+console.log(`Copied ${ENTRIES.length} entries to www/  |  version: build ${buildNumber}`);

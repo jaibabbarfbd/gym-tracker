@@ -190,6 +190,50 @@
     </div>`;
   }
 
+  // ---------- Update banner ----------
+  // Build number baked in at CI time via version.json inside the bundle.
+  // 0 means a local / dev build — no update checks.
+  let _myBuild = 0;
+  let _latestBuild = 0;
+  let _updateDismissed = false;
+
+  async function checkForUpdate() {
+    try {
+      // Our own build number — served from the same origin as the app bundle.
+      const selfRes = await fetch('./version.json?t=' + Date.now(), { cache: 'no-store' });
+      if (!selfRes.ok) return;
+      const self = await selfRes.json();
+      _myBuild = self.build || 0;
+      if (!_myBuild) return; // local / dev build, skip
+
+      // Latest published build — always served from GitHub Pages (main branch).
+      const remoteRes = await fetch(
+        'https://jaibabbarfbd.github.io/gym-tracker/version.json?t=' + Date.now(),
+        { cache: 'no-store' }
+      );
+      if (!remoteRes.ok) return;
+      const remote = await remoteRes.json();
+      _latestBuild = remote.build || 0;
+
+      if (_latestBuild > _myBuild) render();
+    } catch (_) { /* network unavailable — silently skip */ }
+  }
+
+  function updateBanner() {
+    if (_updateDismissed || _latestBuild <= _myBuild) return '';
+    const apkUrl = 'https://github.com/jaibabbarfbd/gym-tracker/releases/latest/download/gym-tracker.apk';
+    return `<div class="banner info" id="update-banner">
+      <span>🆕 Update available (build ${_latestBuild})</span>
+      <div class="row nowrap">
+        <a class="btn small primary" href="${apkUrl}" target="_blank" rel="noopener">Download</a>
+        <button class="icon-btn small" data-action="dismiss-update" aria-label="Dismiss">✕</button>
+      </div>
+    </div>`;
+  }
+
+  // Kick off the update check shortly after startup (non-blocking).
+  setTimeout(checkForUpdate, 4000);
+
   function installBanner() {
     if (db.hideInstall || isStandalone() || GymNative.isNative) return '';
     const dismiss = '<button class="icon-btn small" data-action="hide-install" aria-label="Dismiss">✕</button>';
@@ -562,7 +606,7 @@
       : ms.daysLeft === 0 ? 'Expires today'
       : `${plural(ms.daysLeft, 'day')} left`;
 
-    return `${installBanner()}${notifBanner()}${membershipBanner(p, ms)}
+    return `${updateBanner()}${installBanner()}${notifBanner()}${membershipBanner(p, ms)}
       <h1 class="page-title">${greeting()}, ${esc(p.name)}<span class="muted small">${L.fmtDate(t)}</span></h1>
 
       ${ringsCard(p, t)}
@@ -2348,6 +2392,10 @@
     'hide-install'() {
       db.hideInstall = true;
       save();
+      render();
+    },
+    'dismiss-update'() {
+      _updateDismissed = true;
       render();
     },
     'enable-notifs'() {
