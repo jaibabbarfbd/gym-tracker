@@ -85,6 +85,7 @@
       toast('Could not save. Is browser storage full or blocked?');
     }
     queueNativeReminders(); // app: keep Android's scheduled reminders in step with the data
+    if (typeof schedulePwaTriggers === 'function') schedulePwaTriggers();
   }
 
   let db = loadDb();
@@ -1115,16 +1116,15 @@
       <section class="card">
         <h2>Reminders</h2>
         ${notifSection()}
-        ${GymNative.isIos ? `<section class="card">
-          <h2>iPhone tips</h2>
-          <p class="muted small">⚠️ Some features work differently on iOS:</p>
-          <ul class="muted small" style="padding-left:1.2em;line-height:1.8">
-            <li><b>Steps:</b> Copy from the Health app, then tap "Enter from watch".</li>
-            <li><b>Notifications:</b> Only work when the app is added to your Home Screen.</li>
-            <li><b>Heart rate Bluetooth:</b> Not supported in iOS browsers — use watch's own app.</li>
-            <li><b>Updates:</b> Close and reopen the app to get the latest version.</li>
+        ${GymNative.isIos ? `<div class="card sub-card" style="margin-top:1rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:0.85rem;">
+          <h3 style="margin:0 0 0.3rem;font-size:0.95rem;">📱 iPhone Tips</h3>
+          <ul class="muted small" style="margin:0;padding-left:1.2em;line-height:1.7">
+            <li><b>Steps:</b> Open Apple Health, check steps, then tap "Enter from watch".</li>
+            <li><b>Notifications:</b> Work when the app is installed to your Home Screen.</li>
+            <li><b>Heart rate:</b> Bluetooth watch sync is not supported in iOS browsers.</li>
+            <li><b>Updates:</b> Close and reopen the app to apply the latest build.</li>
           </ul>
-        </section>` : ''}
+        </div>` : ''}
         <form data-form="water-rem" class="stack">
           <label class="switch"><input type="checkbox" name="on" ${r.on ? 'checked' : ''}><span>Water reminders</span></label>
           <div class="grid3">
@@ -1134,8 +1134,11 @@
           </div>
           <button class="btn primary">Save</button>
         </form>
-        <p class="muted small">In-app reminders work while the app is open (also in the background). For reminders when it's closed, add them to your phone's calendar:</p>
-        <button class="btn block" data-action="ics">📅 Download calendar reminders</button>
+        <div class="card sub-card" style="margin-top:1.2rem;background:linear-gradient(135deg,rgba(200,245,60,0.08),rgba(200,245,60,0.02));border:1px solid rgba(200,245,60,0.25);border-radius:12px;padding:1rem;">
+          <h3 style="margin:0 0 0.35rem;font-size:0.95rem;">⏰ Guaranteed Lockscreen Alarms</h3>
+          <p class="muted small" style="margin:0 0 0.75rem;line-height:1.5;">Browser PWAs pause background timers when closed or locked. Tap below to sync your water and supplement schedule directly to your phone's <b>Calendar app</b> (Apple Calendar / Google Calendar) — alarms will ring with sound even with your phone locked or the app completely closed!</p>
+          <button class="btn primary block" data-action="ics">📲 Sync Alarms to Phone Calendar</button>
+        </div>
       </section>
 
       <section class="card">
@@ -1392,10 +1395,10 @@
     updateWakeLock();
   }
 
-  // Keep the screen on while the Workout tab is showing.
+  // Keep the screen on while the Workout tab is showing, counting steps, or running a rest timer.
   async function updateWakeLock() {
     const p = me();
-    const want = 'wakeLock' in navigator && !document.hidden && !!p && !isLocked(p) && (ui.tab === 'workout' || pedo.on);
+    const want = 'wakeLock' in navigator && !document.hidden && !!p && !isLocked(p) && (ui.tab === 'workout' || pedo.on || !!db.restRun);
     if (want && !wakeLock) {
       wakeLock = 'pending';
       try {
@@ -1435,6 +1438,31 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Smart share or download for calendar alarms and files. On iOS/Android mobile browsers,
+  // navigator.share with a .ics file opens the native Calendar app directly.
+  async function shareOrDownloadFile(name, text, type) {
+    if (GymNative.isNative) {
+      GymNative.shareFile(name, text).catch(() => toast('Couldn\'t share the file.'));
+      return;
+    }
+    const blob = new Blob([text], { type });
+    if (navigator.share && typeof File !== 'undefined') {
+      try {
+        const file = new File([blob], name, { type });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: name,
+            files: [file],
+          });
+          return;
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+    download(name, text, type);
   }
 
   // ---------- Mutations ----------
@@ -1620,13 +1648,34 @@
     clearInterval(restTick);
     restTick = setInterval(updateRest, 250);
     updateRest();
+    updateWakeLock();
   }
 
-  // App: an Android notification for when rest ends, so it arrives with the screen off.
+  // Notification for when rest ends, so it arrives even with the screen off.
   function restNotice() {
-    if (!GymNative.isNative || ui.nativeNotif !== 'granted') return;
     const r = db.restRun;
-    GymNative.notifyAt(900001, 'Rest over 💪', 'Time for your next set.', r ? new Date(r.end) : null).catch(() => {});
+    if (GymNative.isNative) {
+      if (ui.nativeNotif !== 'granted') return;
+      GymNative.notifyAt(900001, 'Rest over 💪', 'Time for your next set.', r ? new Date(r.end) : null).catch(() => {});
+      return;
+    }
+    // Web / PWA: if Notification Triggers API is supported in Chromium, schedule exact alarm
+    if ('showTrigger' in Notification.prototype && typeof TimestampTrigger !== 'undefined' && notifState() === 'granted') {
+      navigator.serviceWorker?.ready?.then((reg) => {
+        if (r && r.end > Date.now()) {
+          reg.showNotification('Rest over 💪', {
+            body: 'Time for your next set.',
+            tag: 'rest-timer',
+            icon: 'icons/icon-192.png',
+            badge: 'icons/icon-192.png',
+            vibrate: [200, 100, 200],
+            showTrigger: new TimestampTrigger(r.end),
+          }).catch(() => {});
+        } else {
+          reg.getNotifications({ tag: 'rest-timer' }).then((list) => list.forEach((n) => n.close())).catch(() => {});
+        }
+      }).catch(() => {});
+    }
   }
 
   function stopRest() {
@@ -1634,7 +1683,9 @@
     restTick = null;
     db.restRun = null;
     save();
+    restNotice();
     updateRest();
+    updateWakeLock();
   }
 
   function updateRest() {
@@ -1762,7 +1813,15 @@
       res = await Notification.requestPermission();
     }
     render();
-    if (res === 'granted') notify('Reminders are on 💪', 'You\'ll get nudges for water, supplements and gym fees.', 'welcome');
+    if (res === 'granted') {
+      notify('Reminders are on 💪', 'You\'ll get nudges for water, supplements and gym fees.', 'welcome');
+      if (!GymNative.isNative) {
+        schedulePwaTriggers();
+        setTimeout(() => {
+          toast('Tip: In Settings, tap "Sync Alarms to Phone Calendar" to get alarms when the app is closed!', 5000);
+        }, 1200);
+      }
+    }
   }
 
   // ---------- App (Android) ----------
@@ -1785,6 +1844,53 @@
         remindersSent = key;
       } catch (e) { /* tried again on the next change */ }
     }, 1000);
+  }
+
+  // PWA (Chromium): schedule future water and supplement notifications with the OS AlarmManager
+  // via the Notification Triggers API if supported in the browser.
+  let pwaTriggerTimer = null;
+  function schedulePwaTriggers(p) {
+    if (GymNative.isNative || notifState() !== 'granted') return;
+    if (!('serviceWorker' in navigator) || !('showTrigger' in Notification.prototype) || typeof TimestampTrigger === 'undefined') return;
+    clearTimeout(pwaTriggerTimer);
+    pwaTriggerTimer = setTimeout(async () => {
+      try {
+        const user = p || me();
+        if (!user) return;
+        const reg = await navigator.serviceWorker.ready;
+        if (!reg?.showNotification) return;
+
+        const now = Date.now();
+        const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+
+        // Next water reminder trigger
+        const water = L.waterReminder(user.waterRem, lastWaterTs(user), user.notified.water, now);
+        if (water.next && water.next > now) {
+          reg.showNotification('Drink water 💧', {
+            body: 'Time for a glass of water to hit today\'s goal.',
+            tag: 'trigger-water',
+            icon: 'icons/icon-192.png',
+            badge: 'icons/icon-192.png',
+            showTrigger: new TimestampTrigger(water.next),
+          }).catch(() => {});
+        }
+
+        // Upcoming supplement triggers
+        for (const { supp, slot } of L.suppSlots(user.supps)) {
+          if (!slot) continue;
+          const target = L.atTime(slot, now);
+          if (target > now) {
+            reg.showNotification(`Take your ${supp.name} 💊`, {
+              body: `${supp.dose ? supp.dose + ' · ' : ''}scheduled for ${L.fmt12(slot)}`,
+              tag: `trigger-supp-${supp.id}-${slot}`,
+              icon: 'icons/icon-192.png',
+              badge: 'icons/icon-192.png',
+              showTrigger: new TimestampTrigger(target),
+            }).catch(() => {});
+          }
+        }
+      } catch (_) { /* TimestampTrigger unsupported or disabled */ }
+    }, 1200);
   }
 
   // Today's steps from Health Connect. Steps counted live since the last reading stay on top
@@ -2430,12 +2536,12 @@
     'test-notif'() {
       notify('Test reminder 💪', 'Notifications are working.', 'test');
     },
-    ics() {
+    async ics() {
       const p = me();
       const { ics, count } = L.buildICS(p, today());
       if (!count) return toast('Nothing to schedule yet. Add supplements, water reminders or a membership date first.');
-      download(`gym-tracker-reminders-${p.name.replace(/\W+/g, '-').toLowerCase()}.ics`, ics, 'text/calendar');
-      toast(`${plural(count, 'reminder')} exported. Open the file to add them to your calendar.`);
+      await shareOrDownloadFile(`gym-tracker-reminders-${p.name.replace(/\W+/g, '-').toLowerCase()}.ics`, ics, 'text/calendar');
+      toast(`${plural(count, 'reminder')} exported. Add them to your phone's calendar for guaranteed alarms!`);
     },
     'sync-pull'() {
       syncFollowed();
@@ -2734,7 +2840,9 @@
       return;
     }
     if (ui.hiddenAt && Date.now() - ui.hiddenAt > AUTO_LOCK_MS) ui.unlocked.clear();
+    if (db.restRun && db.restRun.end <= Date.now()) updateRest();
     checkReminders();
+    if (typeof schedulePwaTriggers === 'function') schedulePwaTriggers();
     syncTick();
     // App: catch up on steps taken while it was closed, then count live again.
     refreshHealth();
