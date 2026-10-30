@@ -216,6 +216,67 @@
     return a > b ? 'beat' : a === b ? 'hit' : 'miss';
   }
 
+  // ---------- Progress series (for charts) ----------
+  // One point per session: a lift's best estimated 1RM (reps for bodyweight), a timed exercise's
+  // best time, or a hold's longest time.
+  function liftSeries(workouts, exId, fields = 'wr') {
+    const byDate = new Map();
+    for (const w of workouts) {
+      if (w.exId !== exId || !w.sets.length) continue;
+      const best = bestSet(w.sets, fields);
+      let y;
+      if (fields === 'wr') y = best.w > 0 ? e1rm(best.w, best.r) : best.r;
+      else y = best.t;
+      const prev = byDate.get(w.date);
+      const better = prev == null || (isForTime(fields) ? y < prev : y > prev);
+      if (better) byDate.set(w.date, y);
+    }
+    return [...byDate].sort((a, b) => a[0].localeCompare(b[0])).map(([x, y]) => ({ x, y }));
+  }
+
+  // Monday of the week containing `date`.
+  function weekStart(date) {
+    const d = parseYmd(date);
+    return addDays(date, -((d.getDay() + 6) % 7));
+  }
+
+  // Total weight lifted (kg × reps over weighted sets) for each of the last `weeks` weeks, oldest first.
+  function weeklyVolume(workouts, today, weeks = 8) {
+    const first = addDays(weekStart(today), -7 * (weeks - 1));
+    const out = Array.from({ length: weeks }, (_, i) => ({ x: addDays(first, 7 * i), y: 0 }));
+    for (const w of workouts) {
+      if (w.date < first || w.date > today) continue;
+      const i = Math.floor(daysBetween(first, w.date) / 7);
+      for (const s of w.sets) if (s.w > 0 && s.r > 0) out[i].y += s.w * s.r;
+    }
+    out.forEach((p) => { p.y = Math.round(p.y); });
+    return out;
+  }
+
+  // One value per day for the last `days` days, oldest first.
+  function dailySeries(days, today, valueOf) {
+    return Array.from({ length: days }, (_, i) => {
+      const x = addDays(today, i - days + 1);
+      return { x, y: round2(valueOf(x) || 0) };
+    });
+  }
+
+  // Body log: one entry per date, newest values win. Returns [{ x, y }] for one measurement.
+  function bodySeries(body, key) {
+    return body.filter((b) => b[key] > 0).sort((a, b) => a.date.localeCompare(b.date)).map((b) => ({ x: b.date, y: b[key] }));
+  }
+
+  // Change in a measurement over the last `days` days (latest minus the last value on or before the start).
+  function bodyChange(body, key, today, days) {
+    const series = bodySeries(body, key);
+    if (series.length < 2) return null;
+    const latest = series[series.length - 1];
+    const startDate = addDays(today, -days);
+    const before = [...series].reverse().find((p) => p.x <= startDate) || series[0];
+    if (before === latest) return null;
+    return { change: round2(latest.y - before.y), from: before.x };
+  }
+
   // ---------- Streaks ----------
   // A day counts when a workout set was logged or the day was marked as a rest day.
   // The streak runs back from today, or from yesterday so it isn't lost before today's session.
@@ -532,6 +593,7 @@
     sha256Hex, makePassword, checkPassword,
     newSyncCode, normalizeSyncCode, syncTopic, workoutPayload, parseWorkoutPayload, statusPayload, parseStatus,
     streakInfo, streakNow,
+    liftSeries, weekStart, weeklyVolume, dailySeries, bodySeries, bodyChange,
   };
   root.GymLogic = api;
   if (typeof module !== 'undefined') module.exports = api;

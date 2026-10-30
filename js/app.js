@@ -26,8 +26,11 @@
       water: [],
       workouts: [],
       days: {},
-      steps: {}, // date → { phone, manual }
+      steps: {}, // date → { phone, manual, health, live }
       hr: {}, // date → { sum, n, min, max } heart-rate samples from a watch
+      body: [], // { id, date, weight, waist, chest, arms, thighs, hips, fat } one per date
+      plans: [], // { id, name, type, ex: [exercise ids] }
+      restTimer: { on: true, secs: 90 },
       supps: [],
       suppLog: [],
       exCfg: {},
@@ -47,6 +50,7 @@
       membership: { ...d.membership, ...p.membership },
       notified: { ...d.notified, ...p.notified },
       pub: { ...d.pub, ...p.pub },
+      restTimer: { ...d.restTimer, ...p.restTimer },
     };
     // Phones linked with the old one-way sync code become friends: the leader keeps
     // their code as a friend code, the follower gets the leader as a friend.
@@ -66,7 +70,7 @@
     try {
       raw = localStorage.getItem(STORE_KEY);
       const d = JSON.parse(raw);
-      if (d && Array.isArray(d.profiles)) return { activeId: d.activeId, hideInstall: !!d.hideInstall, profiles: d.profiles.map(normalizeProfile) };
+      if (d && Array.isArray(d.profiles)) return { activeId: d.activeId, hideInstall: !!d.hideInstall, restRun: d.restRun || null, profiles: d.profiles.map(normalizeProfile) };
     } catch (e) {
       // Keep an unreadable save aside instead of overwriting it on the next save.
       try { if (raw) localStorage.setItem(`${STORE_KEY}.unreadable-${Date.now()}`, raw); } catch (_) { /* storage unavailable */ }
@@ -90,6 +94,7 @@
     foodCat: 'All', foodPick: null, foodQty: 1,
     unlocked: new Set(), hiddenAt: 0,
     friendsAt: 0, friendsBusy: false, // last time friends' statuses were fetched
+    progressEx: null, progressDaily: 'protein', // Progress tab choices
     health: 'unknown', // app: Health Connect step access ('granted' | 'not-granted' | 'unavailable')
     nativeNotif: 'default', // app: Android notification permission, in notifState() terms
   };
@@ -769,7 +774,8 @@
 
     let body = '';
     if (!type) {
-      body = `<p class="plan-q">What's the plan ${d === today() ? 'today' : 'for this day'}?</p>`;
+      body = `<p class="plan-q">What's the plan ${d === today() ? 'today' : 'for this day'}?</p>
+        <button class="btn block plan-start-btn" data-action="open-plans">📋 Or start from a workout plan</button>`;
     } else if (type === 'rest') {
       body = restCard(p, d) + entries.map((e) => exerciseCard(p, e)).join('');
     } else {
@@ -782,7 +788,10 @@
             ? 'Add HYROX stations, runs or conditioning. You\'ll see your last time and a time to beat.'
             : 'Pick an exercise. You\'ll see what you lifted last time and today\'s target to beat it.'}</p>
         </section>`}
-        <button class="btn primary block" data-action="pick-exercise">+ Add exercise</button>
+        <div class="row add-row">
+          <button class="btn primary grow" data-action="pick-exercise">+ Add exercise</button>
+          <button class="btn" data-action="open-plans">📋 Plans</button>
+        </div>
         ${!entries.length && dayChips.length ? `<div class="sub muted small">Repeat a recent workout</div>
           <div class="chips scroll">${dayChips.map(([date, ids]) => `<button class="chip" data-action="repeat-day" data-date="${date}">${DAY_META[dayType(p, date)]?.icon || ''} <b>${L.fmtDate(date)}</b> <span class="muted">${esc(dayLabel(ids))}</span></button>`).join('')}</div>` : ''}
         ${exChips.length ? `<div class="sub muted small">Recent exercises</div>
@@ -796,6 +805,115 @@
       ${dayTypePicker(p, d)}
       ${type && type !== 'rest' ? hrLine(p, d) : ''}
       ${body}`;
+  }
+
+  // ---------- Progress tab ----------
+  const BODY_FIELDS = [['waist', 'Waist', 'cm'], ['chest', 'Chest', 'cm'], ['arms', 'Arms', 'cm'], ['thighs', 'Thighs', 'cm'], ['hips', 'Hips', 'cm'], ['fat', 'Body fat', '%']];
+  const signed = (n, unit) => `${n > 0 ? '+' : n < 0 ? '−' : '±'}${L.fmtW(Math.abs(n))} ${unit}`;
+
+  function bodyCard(p, t) {
+    const series = L.bodySeries(p.body, 'weight');
+    const latest = series[series.length - 1];
+    const change = L.bodyChange(p.body, 'weight', t, 30);
+    const todays = p.body.find((b) => b.date === t) || {};
+    const measured = BODY_FIELDS.map(([key, name, unit]) => {
+      const s = L.bodySeries(p.body, key);
+      if (!s.length) return '';
+      const last = s[s.length - 1];
+      const diff = s.length > 1 ? ` <span class="muted small">${signed(L.round2(last.y - s[0].y), unit)} since ${L.fmtDate(s[0].x)}</span>` : '';
+      return `<li><span class="grow">${name}</span><b>${L.fmtW(last.y)} ${unit}</b>${diff}</li>`;
+    }).join('');
+    return `<section class="card" id="body-card">
+      <div class="card-head"><h2>Body weight</h2>${change ? `<span class="pill">${signed(change.change, 'kg')} in 30 days</span>` : ''}</div>
+      <div class="water-amount"><b>${latest ? L.fmtW(latest.y) : '–'}</b> kg${latest ? ` <span class="muted small">· ${latest.x === t ? 'today' : L.relDay(latest.x, t)}</span>` : ''}</div>
+      ${series.length >= 2
+        ? GymCharts.line({ points: series.slice(-90), color: 'var(--water)', fmtY: (v) => `${L.fmtW(L.round2(v))} kg`, label: 'Body weight over time' })
+        : '<p class="muted small">Log your weight on a few days to see the trend. Same time of day (e.g. in the morning) gives the fairest comparison.</p>'}
+      <form data-form="body" class="stack body-form" autocomplete="off">
+        ${stepper('bw-weight', 'weight', 'Today\'s weight (kg)', todays.weight ?? latest?.y ?? '', 0.1, 'inputmode="decimal" step="any" min="20" max="400"')}
+        <details class="measure" ${BODY_FIELDS.some(([k]) => todays[k]) ? 'open' : ''}>
+          <summary>Measurements (optional)</summary>
+          <div class="grid2">${BODY_FIELDS.map(([key, name, unit]) => `<label>${name} (${unit})<input name="${key}" type="number" inputmode="decimal" step="any" min="0" max="${key === 'fat' ? 70 : 300}" value="${todays[key] ?? ''}"></label>`).join('')}</div>
+        </details>
+        <button class="btn primary block">Save for today</button>
+      </form>
+      ${measured ? `<div class="sub muted small">Latest measurements</div><ul class="list compact">${measured}</ul>` : ''}
+    </section>`;
+  }
+
+  function liftCard(p) {
+    const recent = new Map();
+    for (const w of p.workouts) if (w.sets.length && (recent.get(w.exId) || '') < w.date) recent.set(w.exId, w.date);
+    const ids = [...recent].sort((a, b) => b[1].localeCompare(a[1])).map(([id]) => id);
+    if (!ids.length) {
+      return '<section class="card"><h2>Strength</h2><p class="muted">Log a workout and your strength trend shows up here.</p></section>';
+    }
+    const exId = ids.includes(ui.progressEx) ? ui.progressEx : ids[0];
+    const ex = exById(p, exId);
+    const f = fieldsOf(ex);
+    const series = L.liftSeries(p.workouts, exId, f);
+    const weighted = f === 'wr' && p.workouts.some((w) => w.exId === exId && w.sets.some((s) => s.w > 0));
+    const fmtY = f === 'wr' ? (weighted ? (v) => `${L.fmtW(Math.round(v * 10) / 10)} kg` : (v) => `${Math.round(v)} reps`) : (v) => L.fmtDur(v);
+    const lowerBetter = L.isForTime(f);
+    const caption = f === 'wr'
+      ? (weighted ? 'Estimated 1-rep max per session, from your best set.' : 'Most reps in one set, per session.')
+      : lowerBetter ? 'Best time per session. Lower is better.' : 'Longest time per session.';
+    const ys = series.map((s) => s.y);
+    const best = lowerBetter ? Math.min(...ys) : Math.max(...ys);
+    const delta = series.length > 1 ? series[series.length - 1].y - series[0].y : 0;
+    const better = lowerBetter ? delta < 0 : delta > 0;
+    const trend = series.length > 1 && delta
+      ? `<span class="pill ${better ? 'ok' : ''}">${better ? '▲' : '▼'} ${lowerBetter ? L.fmtDur(Math.abs(delta)) + (better ? ' faster' : ' slower') : signed(Math.round(delta * 10) / 10, weighted ? 'kg' : 'reps')}</span>` : '';
+    return `<section class="card">
+      <div class="card-head"><h2>Strength</h2>${trend}</div>
+      <label>Exercise<select name="progress-ex" data-pref="progress-ex">${ids.map((id) => `<option value="${esc(id)}" ${id === exId ? 'selected' : ''}>${esc(exById(p, id).name)}</option>`).join('')}</select></label>
+      <p class="muted small chart-caption">${caption} Best: <b>${fmtY(best)}</b> · ${plural(series.length, 'session')}.</p>
+      ${series.length >= 2 ? GymCharts.line({ points: series, color: 'var(--accent)', fmtY, label: `${ex.name}: ${caption}` }) : '<p class="muted small">Log this exercise once more to see a trend.</p>'}
+    </section>`;
+  }
+
+  function volumeCard(p, t) {
+    const weeks = L.weeklyVolume(p.workouts, t, 8);
+    const fmtKg = (v) => (v >= 1000 ? `${L.fmtW(Math.round(v / 100) / 10)}k kg` : `${Math.round(v)} kg`);
+    const thisWeek = weeks[weeks.length - 1].y;
+    const lastWeek = weeks[weeks.length - 2].y;
+    return `<section class="card">
+      <div class="card-head"><h2>Weekly volume</h2><span class="muted small">This week ${fmtKg(thisWeek)}${lastWeek ? ` · last ${fmtKg(lastWeek)}` : ''}</span></div>
+      <p class="muted small chart-caption">Total weight lifted (kg × reps) each week. The last bar is this week so far.</p>
+      ${weeks.some((w) => w.y > 0)
+        ? GymCharts.bars({ points: weeks, color: 'var(--cal)', fmtY: fmtKg, fmtX: (x) => `${+x.slice(8)} ${L.fmtDate(x).slice(-3)}`, label: 'Weekly training volume', dim: true })
+        : '<p class="muted small">Log weighted sets and your weekly volume shows up here.</p>'}
+    </section>`;
+  }
+
+  function dailyCard(p, t) {
+    const kinds = {
+      protein: { name: 'Protein', color: 'var(--protein)', goal: p.goals.protein, unit: 'g', value: (d) => L.dayTotals(p.meals, d).protein },
+      cal: { name: 'Calories', color: 'var(--cal)', goal: p.goals.cal, unit: 'kcal', value: (d) => L.dayTotals(p.meals, d).cal },
+      steps: { name: 'Steps', color: 'var(--steps)', goal: p.goals.steps, unit: 'steps', value: (d) => L.stepsTotal(p.steps[d]) },
+    };
+    const k = kinds[ui.progressDaily] ? ui.progressDaily : 'protein';
+    const kind = kinds[k];
+    const points = L.dailySeries(14, t, kind.value);
+    const fmtY = (v) => (v >= 10000 ? `${L.fmtW(Math.round(v / 100) / 10)}k` : `${fmtInt(v)}`) + (kind.unit === 'steps' ? '' : ` ${kind.unit}`);
+    const logged = points.filter((x) => x.y > 0);
+    const hit = logged.filter((x) => x.y >= kind.goal).length;
+    const avg = logged.length ? logged.reduce((s, x) => s + x.y, 0) / logged.length : 0;
+    return `<section class="card">
+      <div class="card-head"><h2>Last 14 days</h2></div>
+      <div class="seg" role="group" aria-label="Show">${Object.entries(kinds).map(([key, v]) => `<button class="seg-btn ${key === k ? 'active' : ''}" data-action="progress-daily" data-k="${key}" aria-pressed="${key === k}">${v.name}</button>`).join('')}</div>
+      <p class="muted small chart-caption">${logged.length ? `Average ${fmtY(avg)} on logged days · goal hit on ${plural(hit, 'day')}.` : `Nothing logged in the last 14 days.`}</p>
+      ${logged.length ? GymCharts.bars({ points, color: kind.color, fmtY, goal: kind.goal, goalLabel: `Goal ${fmtY(kind.goal)}`, label: `${kind.name} per day, last 14 days`, dim: true }) : ''}
+    </section>`;
+  }
+
+  function progressView(p) {
+    const t = today();
+    return `<h1 class="page-title">Progress</h1>
+      ${bodyCard(p, t)}
+      ${liftCard(p)}
+      ${volumeCard(p, t)}
+      ${dailyCard(p, t)}`;
   }
 
   function suppsView(p) {
@@ -886,6 +1004,16 @@
           <button class="btn primary">Save</button>
         </form>
         <p class="muted small">Rule of thumb for lifters: 1.6–2.2 g protein per kg of bodyweight.</p>
+      </section>
+
+      <section class="card">
+        <h2>⏱ Rest timer</h2>
+        <form data-form="rest-cfg" class="stack">
+          <label class="switch"><input type="checkbox" name="on" ${p.restTimer.on ? 'checked' : ''}><span>Start a rest timer after each set</span></label>
+          ${stepper('rest-secs', 'secs', 'Rest (seconds)', p.restTimer.secs, 15, 'inputmode="numeric" step="1" min="15" max="900" required')}
+          <button class="btn primary">Save</button>
+        </form>
+        <p class="muted small">Common rests: 60–90 s for isolation work, 2–3 min for heavy compound lifts.</p>
       </section>
 
       <section class="card">
@@ -1124,6 +1252,26 @@
       <p class="muted small">Typical label doses. Follow the product label or your doctor.</p>`;
   }
 
+  function plansSheet(p) {
+    const entries = p.workouts.filter((w) => w.date === ui.date);
+    const row = (plan, mine) => {
+      const names = plan.ex.map((id) => exById(p, id).name);
+      return `<li><div class="grow"><b>${DAY_META[plan.type]?.icon || ''} ${esc(plan.name)}</b>
+          <div class="muted small">${esc(names.slice(0, 3).join(', '))}${names.length > 3 ? ` +${names.length - 3}` : ''}</div></div>
+        <button class="btn small primary" data-action="plan-start" data-id="${esc(plan.id)}">Start</button>
+        ${mine ? `<button class="icon-btn small" data-action="plan-del" data-id="${esc(plan.id)}" aria-label="Delete ${esc(plan.name)}">✕</button>` : ''}</li>`;
+    };
+    return `<div class="sheet-head"><h2>Workout plans</h2><button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button></div>
+      <p class="muted small">Start a plan to add all its exercises ${ui.date === today() ? 'to today' : `to ${L.fmtDate(ui.date)}`}. Each one still shows your last time and today's goal.</p>
+      ${p.plans.length ? `<div class="sub muted small">Your plans</div><ul class="list plan-list">${p.plans.map((x) => row(x, true)).join('')}</ul>` : ''}
+      ${entries.length ? `<form data-form="plan-save" class="row plan-save" autocomplete="off">
+          <input name="name" autocomplete="off" placeholder="Save ${plural(entries.length, 'exercise')} as… e.g. Push day" required maxlength="30">
+          <button class="btn">Save</button>
+        </form>` : '<p class="muted small">Tip: add exercises, then come back here to save them as your own plan.</p>'}
+      <div class="sub muted small">Templates</div>
+      <ul class="list plan-list">${L.PLAN_TEMPLATES.map((x) => row(x, false)).join('')}</ul>`;
+  }
+
   function exSettingsSheet(p, exId) {
     const ex = exById(p, exId);
     const cfg = L.exerciseCfg(ex, p.exCfg[exId]);
@@ -1151,7 +1299,7 @@
   }
 
   // ---------- Render ----------
-  const VIEWS = { today: todayView, diet: dietView, workout: workoutView, supps: suppsView, more: moreView };
+  const VIEWS = { today: todayView, diet: dietView, workout: workoutView, progress: progressView, supps: suppsView, more: moreView };
 
   function render() {
     const p = me();
@@ -1173,6 +1321,7 @@
       if ((ui.tab === 'today' || ui.tab === 'workout') && p.friends.length && Date.now() - ui.friendsAt > maxAge) pollFriends();
     }
     updateLive(false);
+    updateRest();
     updateWakeLock();
   }
 
@@ -1389,6 +1538,76 @@
     document.getElementById(`ex-${exId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // ---------- Rest timer ----------
+  // Starts after each logged set. The end time is saved, so reopening the app mid-rest keeps it.
+  let restTick = null;
+  function startRest(secs) {
+    db.restRun = { end: Date.now() + secs * 1000, total: secs };
+    save();
+    // Sound needs to be unlocked from a tap, and logging a set is one.
+    try {
+      beep.ctx = beep.ctx || new (window.AudioContext || window.webkitAudioContext)();
+      beep.ctx.resume();
+    } catch (e) { /* no sound on this device */ }
+    restNotice();
+    clearInterval(restTick);
+    restTick = setInterval(updateRest, 250);
+    updateRest();
+  }
+
+  // App: an Android notification for when rest ends, so it arrives with the screen off.
+  function restNotice() {
+    if (!GymNative.isNative || ui.nativeNotif !== 'granted') return;
+    const r = db.restRun;
+    GymNative.notifyAt(900001, 'Rest over 💪', 'Time for your next set.', r ? new Date(r.end) : null).catch(() => {});
+  }
+
+  function stopRest() {
+    clearInterval(restTick);
+    restTick = null;
+    db.restRun = null;
+    save();
+    updateRest();
+  }
+
+  function updateRest() {
+    const el = $('#rest');
+    const r = db.restRun;
+    const p = me();
+    const show = !!r && !!p && !isLocked(p);
+    el.hidden = !show;
+    document.body.classList.toggle('resting', show);
+    if (!show) return;
+    const left = Math.ceil((r.end - Date.now()) / 1000);
+    if (left <= 0) return restDone();
+    $('.rest-time', el).textContent = L.fmtDur(left);
+    $('.rest-bar span', el).style.width = `${Math.min(100, (1 - left / r.total) * 100)}%`;
+  }
+
+  function restDone() {
+    stopRest();
+    buzz([200, 100, 200]);
+    beep();
+    toast('⏱ Rest over. Time for your next set 💪');
+    if (!GymNative.isNative && document.hidden) notify('Rest over 💪', 'Time for your next set.', 'rest');
+  }
+
+  function beep() {
+    const ctx = beep.ctx;
+    if (!ctx) return;
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.6);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.6);
+    } catch (e) { /* no sound */ }
+  }
+
   function logTimedSet(p, entry, ex, fields, fd) {
     const set = {};
     if (fields.includes('w')) set.w = L.round2(Math.max(0, +fd.get('w') || 0));
@@ -1405,6 +1624,7 @@
     render();
     buzz(25);
     queuePublish(p); // the streak may change
+    if (p.restTimer.on) startRest(p.restTimer.secs);
     if (prev && L.compareSet(set, prev.set, fields) === 'beat') {
       toast(`⚡ New best on ${esc(ex.name)}: ${esc(setText(set, ex))}`);
     }
@@ -1877,6 +2097,48 @@
       render();
       buzz();
     },
+    'open-plans'() {
+      openSheet(plansSheet(me()));
+    },
+    'plan-start'(el) {
+      const p = me();
+      const plan = [...p.plans, ...L.PLAN_TEMPLATES].find((x) => x.id === el.dataset.id);
+      if (!plan) return;
+      if (!p.days[ui.date] || p.days[ui.date] === 'rest') p.days[ui.date] = plan.type;
+      addToWorkout(p, ui.date, plan.ex);
+      ui.openEx = plan.ex[0];
+      closeSheet();
+      ui.tab = 'workout';
+      render();
+      toast(`📋 ${esc(plan.name)}: ${plural(plan.ex.length, 'exercise')} added`);
+    },
+    'plan-del'(el) {
+      const p = me();
+      const plan = p.plans.find((x) => x.id === el.dataset.id);
+      if (!plan || !confirm(`Delete the plan "${plan.name}"?`)) return;
+      p.plans = p.plans.filter((x) => x !== plan);
+      save();
+      openSheet(plansSheet(p));
+    },
+    'progress-daily'(el) {
+      ui.progressDaily = el.dataset.k;
+      render();
+    },
+    'rest-adj'(el) {
+      const r = db.restRun;
+      if (!r) return;
+      const d = +el.dataset.d;
+      r.end = Math.max(Date.now() + 1000, r.end + d * 1000);
+      r.total = Math.max(1, r.total + d);
+      save();
+      restNotice();
+      updateRest();
+      buzz(8);
+    },
+    'rest-skip'() {
+      stopRest();
+      restNotice(); // cancels the pending "rest over" notification in the app
+    },
     'hyrox-sim'() {
       addToWorkout(me(), ui.date, L.HYROX_SIM);
       ui.openEx = L.HYROX_SIM[0];
@@ -2180,6 +2442,7 @@
       render();
       buzz(25);
       queuePublish(p); // the streak may change
+      if (p.restTimer.on) startRest(p.restTimer.secs);
 
       const v = L.e1rm(w, r);
       if (prevBest1rm && v > prevBest1rm.v) toast(`🏆 New PR on ${esc(exById(p, entry.exId).name)}! Est. 1-rep max ${L.fmtW(v)} kg`);
@@ -2255,6 +2518,41 @@
       render();
       toast(n > 0 ? `⌚ ${fmtInt(n)} steps saved for today` : 'Watch steps cleared');
     },
+    body(f, fd) {
+      const p = me();
+      const t = today();
+      const entry = p.body.find((b) => b.date === t) || { id: uid(), date: t };
+      for (const key of ['weight', ...BODY_FIELDS.map(([k]) => k)]) {
+        const v = L.round2(+fd.get(key));
+        if (v > 0) entry[key] = v;
+        else delete entry[key];
+      }
+      if (!Object.keys(entry).some((k) => !['id', 'date'].includes(k))) return toast('Enter your weight or a measurement first.');
+      if (!p.body.includes(entry)) p.body.push(entry);
+      save();
+      render();
+      toast('Saved for today');
+    },
+    'plan-save'(f, fd) {
+      const p = me();
+      const name = fd.get('name').trim();
+      const ex = p.workouts.filter((w) => w.date === ui.date).sort((a, b) => a.ts - b.ts).map((w) => w.exId);
+      if (!name || !ex.length) return;
+      const same = p.plans.find((x) => x.name.toLowerCase() === name.toLowerCase());
+      if (same && !confirm(`Replace your plan "${same.name}" with today's exercises?`)) return;
+      const plan = { id: same?.id || 'p-' + uid(), name, type: dayType(p, ui.date) === 'hybrid' ? 'hybrid' : 'strength', ex };
+      p.plans = same ? p.plans.map((x) => (x === same ? plan : x)) : [...p.plans, plan];
+      save();
+      openSheet(plansSheet(p));
+      toast(`📋 Saved "${esc(name)}" (${plural(ex.length, 'exercise')})`);
+    },
+    'rest-cfg'(f, fd) {
+      const p = me();
+      p.restTimer = { on: fd.get('on') === 'on', secs: Math.min(900, Math.max(15, Math.round(+fd.get('secs')) || 90)) };
+      save();
+      render();
+      toast(p.restTimer.on ? `⏱ Rest timer: ${L.fmtDur(p.restTimer.secs)} after each set` : 'Rest timer off');
+    },
     async 'friend-add'(f, fd) {
       const p = me();
       const code = L.normalizeSyncCode(fd.get('code'));
@@ -2320,6 +2618,9 @@
       // Tidy number-pad entry: "405" → "4:05".
       const sec = L.parseDur(e.target.value);
       if (sec) e.target.value = L.fmtDur(sec);
+    } else if (e.target.matches('[data-pref="progress-ex"]')) {
+      ui.progressEx = e.target.value;
+      render();
     } else if (e.target.matches('[data-pref="lead"]')) {
       const p = me();
       p.lead = e.target.checked;
@@ -2381,7 +2682,12 @@
 
   window.addEventListener('online', syncTick);
 
+  if (db.restRun && db.restRun.end < Date.now() - 3000) db.restRun = null;
   render();
+  if (db.restRun) {
+    restTick = setInterval(updateRest, 250);
+    updateRest();
+  }
   checkReminders();
   syncTick();
   initNative();

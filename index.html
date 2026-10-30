@@ -27,6 +27,16 @@
 
   <div class="live" id="live" aria-live="polite" hidden></div>
 
+  <div class="rest" id="rest" role="timer" aria-label="Rest timer" hidden>
+    <div class="rest-bar"><span></span></div>
+    <div class="rest-row">
+      <span class="rest-label">Rest</span><b class="rest-time">1:30</b>
+      <button class="btn small" data-action="rest-adj" data-d="-15" aria-label="15 seconds less">−15</button>
+      <button class="btn small" data-action="rest-adj" data-d="15" aria-label="15 seconds more">+15</button>
+      <button class="btn small" data-action="rest-skip">Skip</button>
+    </div>
+  </div>
+
   <nav class="tabs" id="tabs" hidden>
     <button data-action="tab" data-tab="today">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Today
@@ -36,6 +46,9 @@
     </button>
     <button data-action="tab" data-tab="workout">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5v11M3.5 9v6M17.5 6.5v11M20.5 9v6M6.5 12h11"/></svg>Workout
+    </button>
+    <button data-action="tab" data-tab="progress">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16h16"/><path d="M7 15l4-4 3 3 5-6"/></svg>Progress
     </button>
     <button data-action="tab" data-tab="supps">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 20.5a5 5 0 0 1-7-7l7-7a5 5 0 0 1 7 7z"/><path d="M8.5 8.5l7 7"/></svg>Supps
@@ -54,6 +67,7 @@
   <script src="js/logic.js"></script>
   <script src="js/sync.js"></script>
   <script src="js/native.js"></script>
+  <script src="js/charts.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

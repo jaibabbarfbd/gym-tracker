@@ -530,7 +530,19 @@
     ],
   };
 
-  const api = { STRENGTH_GROUPS, HYBRID_GROUPS, GROUPS: [...STRENGTH_GROUPS, ...HYBRID_GROUPS], FIELDS, EXERCISES, HYROX_SIM, FOODS, SUPPLEMENTS };
+  // Ready-made workout plans: [id, name, day type, exercise ids in order].
+  const PLAN_TEMPLATES = [
+    ['t-push', 'Push (chest, shoulders, triceps)', 'strength', ['bench-press', 'incline-db', 'ohp', 'lateral-raise', 'pushdown', 'oh-ext']],
+    ['t-pull', 'Pull (back, biceps)', 'strength', ['pullup', 'bb-row', 'lat-pulldown', 'face-pull', 'bb-curl', 'hammer-curl']],
+    ['t-legs', 'Legs', 'strength', ['squat', 'rdl', 'leg-press', 'leg-curl', 'leg-ext', 'calf-raise']],
+    ['t-upper', 'Upper body', 'strength', ['bench-press', 'bb-row', 'ohp', 'lat-pulldown', 'db-curl', 'pushdown']],
+    ['t-lower', 'Lower body', 'strength', ['squat', 'rdl', 'bulgarian', 'leg-ext', 'leg-curl', 'calf-raise']],
+    ['t-full', 'Full body', 'strength', ['squat', 'bench-press', 'bb-row', 'ohp', 'rdl', 'plank']],
+    ['t-hyrox', 'HYROX simulation', 'hybrid', HYROX_SIM],
+    ['t-engine', 'Hybrid engine', 'hybrid', ['run-1k', 'ski-intervals', 'row-intervals', 'burpees', 'hx-wallballs', 'hx-farmers']],
+  ].map(([id, name, type, ex]) => ({ id, name, type, ex }));
+
+  const api = { STRENGTH_GROUPS, HYBRID_GROUPS, GROUPS: [...STRENGTH_GROUPS, ...HYBRID_GROUPS], FIELDS, EXERCISES, HYROX_SIM, PLAN_TEMPLATES, FOODS, SUPPLEMENTS };
   root.GymData = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

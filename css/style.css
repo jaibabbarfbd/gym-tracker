@@ -810,3 +810,84 @@ main > .chips.scroll { margin-left: -16px; margin-right: -16px; padding: 0 16px 
 .friend-manage li { flex-wrap: wrap; }
 .friend-manage .btn.small { min-height: 34px; }
 .btn.on { border-color: rgba(52, 211, 153, .45); background: rgba(52, 211, 153, .12); color: var(--good); }
+
+/* ---------- Segmented toggle (Progress) ---------- */
+.seg { display: flex; gap: 4px; margin-bottom: 12px; padding: 4px; border: 1px solid var(--border-strong); border-radius: 16px; background: rgba(255, 255, 255, .04); }
+.seg-btn { flex: 1; min-width: 0; min-height: 40px; padding: 6px; border: 0; border-radius: 12px; background: none; color: var(--muted); font-weight: 750; white-space: nowrap; }
+.seg-btn.active { background: linear-gradient(180deg, var(--accent-hi), #b5ea24); color: var(--accent-ink); }
+
+/* ---------- Rest timer (above the dock) ---------- */
+.rest {
+  position: fixed;
+  left: 50%;
+  bottom: calc(88px + env(safe-area-inset-bottom));
+  z-index: 24;
+  width: min(calc(100% - 24px), 520px);
+  overflow: hidden;
+  transform: translateX(-50%);
+  border: 1px solid rgba(200, 245, 60, .35);
+  border-radius: 20px;
+  background: rgba(16, 18, 22, .92);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 16px 36px -14px rgba(0, 0, 0, .9);
+}
+.rest-bar { height: 4px; background: rgba(200, 245, 60, .15); }
+.rest-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s linear; }
+.rest-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 16px; }
+.rest-label { color: var(--muted); font-size: 13px; font-weight: 700; }
+.rest-time { flex: 1; font-size: 24px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.rest .btn.small { min-width: 48px; padding: 6px 10px; }
+body.resting { padding-bottom: calc(170px + env(safe-area-inset-bottom)); }
+body.resting .live { bottom: calc(160px + env(safe-area-inset-bottom)); }
+@media (pointer: coarse) { body.typing .rest { display: none; } }
+
+/* ---------- Plans ---------- */
+.add-row { margin: 4px 0 14px; }
+.add-row .btn { min-height: 52px; }
+.plan-list li { gap: 8px; }
+.plan-save { margin: 12px 0 4px; }
+
+/* ---------- Body & charts ---------- */
+.body-form { margin-top: 14px; }
+.measure summary { cursor: pointer; color: var(--accent-text); font-weight: 700; font-size: 14px; padding: 4px 0; }
+.measure[open] summary { margin-bottom: 10px; }
+.chart-caption { margin: 8px 0 6px; }
+.chart { position: relative; margin: 6px -4px 0; touch-action: pan-y; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.grid-line { stroke: rgba(255, 255, 255, .06); stroke-width: 1; }
+.axis-label { fill: var(--muted); font: 600 10px var(--font); }
+.goal-line { stroke: rgba(255, 255, 255, .35); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.goal-label { fill: var(--text-2); font: 700 10px var(--font); }
+.series { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.dot { stroke: var(--surface); stroke-width: 2; }
+.value-label { fill: var(--text); font: 800 11px var(--font); }
+.bar-mark.dim { opacity: .5; }
+.ch-x { stroke: rgba(255, 255, 255, .3); stroke-width: 1; }
+.ch-dot { stroke: var(--surface); stroke-width: 2; }
+.chart-tip {
+  position: absolute;
+  top: -6px;
+  transform: translate(-50%, -100%);
+  padding: 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: rgba(24, 27, 33, .96);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.chart-table { margin-top: 6px; }
+.chart-table summary { cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.chart-table table { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.chart-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 4px 0; }
+.chart-table td { text-align: right; padding: 4px 0; }
+.chart-table tr + tr { border-top: 1px solid var(--border); }
+
+/* Six tabs: a little tighter on narrow phones. */
+@media (max-width: 380px) {
+  .tabs button { font-size: 10.5px; }
+  .tabs svg { width: 21px; height: 21px; }
+}

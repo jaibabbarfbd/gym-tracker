@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   apk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned: the Android SDK comes preinstalled on this image
     env:
       HAS_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' }}
     steps:
