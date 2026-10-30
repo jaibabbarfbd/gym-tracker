@@ -221,6 +221,12 @@
 
   function updateBanner() {
     if (_updateDismissed || _latestBuild <= _myBuild) return '';
+    if (GymNative.isIos) {
+      return `<div class="banner info" id="update-banner">
+        <span>🆕 Update available — refresh to get it</span>
+        <button class="icon-btn small" data-action="dismiss-update" aria-label="Dismiss">✕</button>
+      </div>`;
+    }
     const apkUrl = 'https://github.com/jaibabbarfbd/gym-tracker/releases/latest/download/gym-tracker.apk';
     return `<div class="banner info" id="update-banner">
       <span>🆕 Update available (build ${_latestBuild})</span>
@@ -348,11 +354,16 @@
       const note = GymNative.isNative
         ? '<p class="muted small week-steps">For all-day steps, install or update <b>Health Connect</b> from the Play Store, then reopen the app.</p>'
         : '';
+      const iosHealthBtn = !GymNative.isNative && GymNative.isIosPwa
+        ? `<button class="btn" data-action="ios-health">📱 Open Apple Health</button>` : '';
+      const iosTip = !GymNative.isNative && GymNative.isIosPwa
+        ? `<p class="muted small">Tip: copy your step count from Apple Health, then tap "Enter from watch" to log it.</p>` : '';
       actions = `${counting ? `<p class="counting"><span class="dot"></span><span>Counting… <b>${fmtInt(pedo.session)}</b> steps this walk. Keep the app open (in your hand or pocket); the screen stays on.</span></p>` : ''}
         <div class="row steps-actions">
           <button class="btn ${counting ? 'stop' : 'primary'}" data-action="pedo-toggle">${counting ? '⏹ Stop counting' : '👟 Count with phone'}</button>
+          ${iosHealthBtn}
           ${watchBtn}
-        </div>${note}`;
+        </div>${iosTip}${note}`;
     }
     return `<section class="card" id="steps-card">
       <div class="card-head"><h2>Steps</h2><span class="muted small">${source}</span></div>
@@ -1007,7 +1018,9 @@
       granted: GymNative.isNative ? '✅ Notifications are on. Reminders fire even with the app closed.' : '✅ Notifications are on.',
       denied: GymNative.isNative ? '🚫 Notifications are blocked. Allow them in Android Settings → Apps → Gym Tracker → Notifications.' : '🚫 Notifications are blocked. Allow them in your browser\'s site settings.',
       default: '🔕 Notifications are off.',
-      unsupported: '⚠️ This browser can\'t show notifications. On iPhone, add the app to your Home Screen first (Share → Add to Home Screen).',
+      unsupported: GymNative.isIos && !GymNative.isIosPwa
+        ? '📲 Add this app to your Home Screen (Share → Add to Home Screen) to enable notifications.'
+        : '🚫 This browser can\'t show notifications.',
     }[s];
     return `<p>${status}</p>
       ${s === 'default' ? '<button class="btn primary block" data-action="enable-notifs">Enable notifications</button>' : ''}
@@ -1102,6 +1115,16 @@
       <section class="card">
         <h2>Reminders</h2>
         ${notifSection()}
+        ${GymNative.isIos ? `<section class="card">
+          <h2>iPhone tips</h2>
+          <p class="muted small">⚠️ Some features work differently on iOS:</p>
+          <ul class="muted small" style="padding-left:1.2em;line-height:1.8">
+            <li><b>Steps:</b> Copy from the Health app, then tap "Enter from watch".</li>
+            <li><b>Notifications:</b> Only work when the app is added to your Home Screen.</li>
+            <li><b>Heart rate Bluetooth:</b> Not supported in iOS browsers — use watch's own app.</li>
+            <li><b>Updates:</b> Close and reopen the app to get the latest version.</li>
+          </ul>
+        </section>` : ''}
         <form data-form="water-rem" class="stack">
           <label class="switch"><input type="checkbox" name="on" ${r.on ? 'checked' : ''}><span>Water reminders</span></label>
           <div class="grid3">
@@ -2123,6 +2146,9 @@
     },
     'health-settings'() {
       GymNative.openHealthSettings();
+    },
+    'ios-health'() {
+      window.location.href = 'x-apple-health://';
     },
     'hr-connect'() {
       connectWatch();

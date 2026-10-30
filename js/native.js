@@ -6,6 +6,8 @@
   'use strict';
   const cap = root.Capacitor;
   const isNative = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) && !isNative;
+  const isIosPwa = isIos && (navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches);
   const plugin = (name) => (isNative ? (cap.Plugins && cap.Plugins[name]) || (cap.registerPlugin && cap.registerPlugin(name)) : null);
   const Health = plugin('Health');
   const Notifs = plugin('LocalNotifications');
@@ -101,5 +103,5 @@
   }
   const shareText = (text) => Share.share({ text });
 
-  root.GymNative = { isNative, stepsAccess, requestSteps, stepsToday, openHealthSettings, notifPermission, setReminders, notifyAt, shareFile, shareText };
+  root.GymNative = { isNative, isIos, isIosPwa, stepsAccess, requestSteps, stepsToday, openHealthSettings, notifPermission, setReminders, notifyAt, shareFile, shareText };
 })(window);
