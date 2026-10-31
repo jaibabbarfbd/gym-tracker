@@ -5,6 +5,9 @@
   const STORE_KEY = 'gymbros.v1'; // the app's original name; kept so existing data still loads
   const MEAL_TYPES = ['Breakfast', 'Lunch', 'Snack', 'Pre-workout', 'Post-workout', 'Dinner'];
   const AUTO_LOCK_MS = 15 * 60 * 1000;
+  // Reminder notifications (water, supplements, gym fees, rest over) and their settings and calendar
+  // export are switched off for now. true brings them all back; the in-app timers and checklists stay either way.
+  const REMINDERS = false;
 
   // ---------- Storage ----------
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -23,6 +26,7 @@
       waterRem: { on: true, every: 60, from: '08:00', to: '22:00' },
       membership: { end: '', fee: '', months: 1, warnDays: 3, payments: [] },
       meals: [],
+      products: [], // { id, name, brand, serving, cal, protein, code } foods you added or scanned
       water: [],
       workouts: [],
       days: {},
@@ -70,15 +74,15 @@
     try {
       raw = localStorage.getItem(STORE_KEY);
       const d = JSON.parse(raw);
-      if (d && Array.isArray(d.profiles)) return { activeId: d.activeId, hideInstall: !!d.hideInstall, restRun: d.restRun || null, profiles: d.profiles.map(normalizeProfile) };
+      if (d && Array.isArray(d.profiles)) return { activeId: d.activeId, hideInstall: !!d.hideInstall, restRun: d.restRun || null, cloud: d.cloud || null, profiles: d.profiles.map(normalizeProfile) };
     } catch (e) {
       // Keep an unreadable save aside instead of overwriting it on the next save.
       try { if (raw) localStorage.setItem(`${STORE_KEY}.unreadable-${Date.now()}`, raw); } catch (_) { /* storage unavailable */ }
     }
-    return { profiles: [], activeId: null, hideInstall: false };
+    return { profiles: [], activeId: null, hideInstall: false, cloud: null };
   }
 
-  function save() {
+  function save(upload = true) {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(db));
     } catch (e) {
@@ -86,6 +90,7 @@
     }
     queueNativeReminders(); // app: keep Android's scheduled reminders in step with the data
     if (typeof schedulePwaTriggers === 'function') schedulePwaTriggers();
+    if (upload) queueSync(); // signed in: back it up shortly
   }
 
   let db = loadDb();
@@ -93,19 +98,17 @@
   const ui = {
     tab: 'today', date: L.ymd(), openEx: null, pickGroup: 'All', mealType: null, foods: [],
     foodCat: 'All', foodPick: null, foodQty: 1,
+    foodGroup: 'indian', foodView: 'list', foodQuery: '', web: null, productDraft: null, productNote: '', // food sheet
     unlocked: new Set(), hiddenAt: 0,
     friendsAt: 0, friendsBusy: false, // last time friends' statuses were fetched
     progressEx: null, progressDaily: 'protein', // Progress tab choices
-    health: 'unknown', // app: Health Connect step access ('granted' | 'not-granted' | 'unavailable')
     nativeNotif: 'default', // app: Android notification permission, in notifState() terms
+    cloudStatus: 'idle', cloudError: '', // account backup: 'idle' | 'syncing' | 'ok' | 'error'
   };
   let installEvt = null;
   let wakeLock = null;
   // Phone step counting (works only while the app is open) and a Bluetooth heart-rate watch.
-  const pedo = { on: false, push: null, session: 0, pid: null, gotData: false, lastSave: 0 };
   const hrm = { device: null, status: 'off', bpm: 0, name: '', pid: null, lastSave: 0 };
-  // App only: steps counted live while open, on top of Health Connect's last number (`base`).
-  const live = { on: false, push: null, day: '', base: 0, extra: 0, lastSave: 0 };
 
   // ---------- Helpers ----------
   const $ = (s, el = document) => el.querySelector(s);
@@ -147,7 +150,12 @@
     return entries.some((e) => L.HYBRID_GROUPS.includes(exById(p, e.exId).group)) ? 'hybrid' : 'strength';
   }
 
-  const FOOD_LIST = Object.entries(L.FOODS).flatMap(([cat, list]) => list.map(([name, serving, cal, protein]) => ({ name, serving, cal, protein, cat })));
+  const toFoods = (cats, group) => Object.entries(cats).flatMap(([cat, list]) => list.map(([name, serving, cal, protein]) => ({ name, serving, cal, protein, cat, group })));
+  const FOOD_LIST = [...toFoods(L.FOODS, 'indian'), ...toFoods(L.PACKAGED, 'packaged')];
+  const FOOD_GROUPS = { indian: ['🍛 Indian', L.FOODS], packaged: ['🍫 Packaged', L.PACKAGED], mine: ['⭐ Mine', null] };
+  const foodName = (f) => (f.brand && !f.name.toLowerCase().includes(f.brand.toLowerCase()) ? `${f.brand} ${f.name}` : f.name);
+  // A supplement with calories / protein (whey, gainer) is logged to Diet when ticked off.
+  const suppFood = (s) => s.cal != null && s.protein != null && (s.cal > 0 || s.protein > 0);
   const SUPP_LIST = Object.entries(L.SUPPLEMENTS).flatMap(([cat, list]) => list.map(([name, dose, times, note]) => ({ name, dose, times, note, cat })));
   const waterOn = (p, d) => p.water.filter((w) => w.date === d).reduce((t, w) => t + w.ml, 0);
   const lastWaterTs = (p) => p.water.reduce((m, w) => Math.max(m, w.ts), 0);
@@ -255,7 +263,7 @@
   }
 
   function notifBanner() {
-    if (notifState() !== 'default') return '';
+    if (!REMINDERS || notifState() !== 'default') return '';
     return `<div class="banner info"><span>🔔 Turn on reminders for water, supplements and gym fees</span>
       <button class="btn small primary" data-action="enable-notifs">Enable</button></div>`;
   }
@@ -272,6 +280,7 @@
   }
 
   function nextWaterText(p) {
+    if (!REMINDERS) return '';
     if (!p.waterRem.on) return 'Reminders off';
     const { next } = L.waterReminder(p.waterRem, lastWaterTs(p), p.notified.water, Date.now());
     return next ? `Next reminder ${L.fmtClock(next)}` : 'No more reminders today';
@@ -332,46 +341,20 @@
     const total = L.stepsTotal(rec);
     const goal = p.goals.steps;
     const left = goal - total;
-    const counting = pedo.on && pedo.pid === p.id;
-    // Name whichever source gives today's number.
-    const top = Math.max(rec.manual || 0, rec.phone || 0, rec.health || 0, rec.live || 0);
-    const source = !top ? ''
-      : top === (rec.manual || 0) ? '⌚ From your watch / Health app'
-      : top === (rec.health || 0) || top === (rec.live || 0) ? `📲 Health Connect${live.on ? ' · live' : ''}`
-      : '👟 Counted by phone';
     const week = Array.from({ length: 7 }, (_, i) => L.addDays(t, i - 6)).map((d) => ({ d, n: L.stepsTotal(p.steps[d]) })).filter((x) => x.n);
     const best = week.reduce((a, b) => (b.n > (a?.n || 0) ? b : a), null);
     const avg = week.length ? week.reduce((s, x) => s + x.n, 0) / week.length : 0;
-    const watchBtn = '<button class="btn" data-action="steps-manual">⌚ Enter from watch</button>';
-    let actions;
-    if (GymNative.isNative && ui.health === 'granted') {
-      // App: Health Connect counts all day, even with the app closed; live counting adds to it while open.
-      actions = `<p class="counting"><span class="dot"></span><span>Counting all day from Health Connect${live.on ? ', live while the app is open' : ''}.</span></p>
-        <div class="row steps-actions">${watchBtn}<button class="btn" data-action="health-settings">Health Connect settings</button></div>`;
-    } else if (GymNative.isNative && ui.health !== 'unavailable') {
-      actions = `<div class="row steps-actions"><button class="btn primary" data-action="health-connect">📲 Turn on all-day steps</button>${watchBtn}</div>
-        <p class="muted small week-steps">Reads your steps from Health Connect, which keeps counting with the app closed.</p>`;
-    } else {
-      const note = GymNative.isNative
-        ? '<p class="muted small week-steps">For all-day steps, install or update <b>Health Connect</b> from the Play Store, then reopen the app.</p>'
-        : '';
-      const iosHealthBtn = !GymNative.isNative && GymNative.isIosPwa
-        ? `<button class="btn" data-action="ios-health">📱 Open Apple Health</button>` : '';
-      const iosTip = !GymNative.isNative && GymNative.isIosPwa
-        ? `<p class="muted small">Tip: copy your step count from Apple Health, then tap "Enter from watch" to log it.</p>` : '';
-      actions = `${counting ? `<p class="counting"><span class="dot"></span><span>Counting… <b>${fmtInt(pedo.session)}</b> steps this walk. Keep the app open (in your hand or pocket); the screen stays on.</span></p>` : ''}
-        <div class="row steps-actions">
-          <button class="btn ${counting ? 'stop' : 'primary'}" data-action="pedo-toggle">${counting ? '⏹ Stop counting' : '👟 Count with phone'}</button>
-          ${iosHealthBtn}
-          ${watchBtn}
-        </div>${iosTip}${note}`;
-    }
+    const appleHealth = GymNative.isIosPwa ? '<button class="btn" data-action="ios-health">📱 Open Apple Health</button>' : '';
     return `<section class="card" id="steps-card">
-      <div class="card-head"><h2>Steps</h2><span class="muted small">${source}</span></div>
+      <div class="card-head"><h2>Steps</h2>${total ? '<span class="muted small">✏️ Entered by you</span>' : ''}</div>
       <div class="water-amount"><b>${fmtInt(total)}</b> / ${fmtInt(goal)}</div>
       <div class="bar steps"><span style="width:${Math.min(100, (total / goal) * 100)}%"></span></div>
       <div class="muted small">${left > 0 ? `${fmtInt(left)} to go` : 'Goal hit 💪'} · about ${L.round2((total * 0.75) / 1000)} km</div>
-      ${actions}
+      <div class="row steps-actions">
+        <button class="btn primary" data-action="steps-manual">✏️ ${total ? 'Update' : 'Enter'} today's steps</button>
+        ${appleHealth}
+      </div>
+      <p class="muted small week-steps">Automatic step counting isn't supported yet. Copy today's steps from your phone's Health / Fit app or your watch.</p>
       ${week.length > 1 ? `<p class="muted small week-steps">Last 7 days: avg ${fmtInt(avg)} · best ${fmtInt(best.n)} (${L.fmtDate(best.d).slice(0, 3)})</p>` : ''}
     </section>`;
   }
@@ -391,7 +374,7 @@
 
   function watchSection() {
     if (GymNative.isNative) {
-      return `<p class="muted small">Steps from a watch arrive automatically when its app syncs to Health Connect (e.g. Samsung Health, Fitbit, Google Fit). For other watches, use <b>⌚ Enter from watch</b> on the Today screen.</p>
+      return `<p class="muted small">Automatic step counting isn't supported yet. Copy the steps from your watch's app with <b>✏️ Enter today's steps</b> on the Today screen.</p>
         <p class="muted small">Live heart rate over Bluetooth works in the web version: open the app's website in Chrome.</p>`;
     }
     const status = {
@@ -556,14 +539,54 @@
       </button>`).join('')}</div>`;
   }
 
+  // ---------- Weekly split ----------
+  // What you usually train on each weekday, learned from your last four weeks (see L.weeklySplit).
+  const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const weekdayOf = (date) => L.parseYmd(date).getDay();
+  const usualFor = (p, date) => L.weeklySplit(p.workouts, p.days, date)[weekdayOf(date)] || null;
+  const usualType = (p, u) => u.type || (u.ex.some((id) => L.HYBRID_GROUPS.includes(exById(p, id).group)) ? 'hybrid' : 'strength');
+  const exNames = (p, ids, max) => {
+    const names = ids.map((id) => exById(p, id).name);
+    return names.slice(0, max).join(', ') + (names.length > max ? ` +${names.length - max}` : '');
+  };
+
+  // "Usually on Mondays: …" with one tap to load those exercises. Rest days only show while the day is still unplanned.
+  function usualCard(p, d) {
+    const u = usualFor(p, d);
+    const day = WEEKDAYS[weekdayOf(d)];
+    if (!u || (u.type === 'rest' && dayType(p, d))) return '';
+    if (u.type === 'rest') return `<p class="usual-rest muted small">💤 ${day}s are usually a rest day for you.</p>`;
+    return `<div class="usual">
+      <div class="muted small">${DAY_META[usualType(p, u)].icon} Usually on ${day}s · last done ${L.fmtDate(u.date)}</div>
+      <div class="usual-ex">${esc(exNames(p, u.ex, 4))}</div>
+      <button class="btn primary block" data-action="load-usual" data-date="${d}">Load ${plural(u.ex.length, 'exercise')}</button>
+    </div>`;
+  }
+
+  // The next six days of your split, so you can see what's coming.
+  function weekAhead(p, t) {
+    const split = L.weeklySplit(p.workouts, p.days, t);
+    const rows = [];
+    for (let i = 1; i <= 6; i++) {
+      const date = L.addDays(t, i);
+      const u = split[weekdayOf(date)];
+      if (!u) continue;
+      rows.push(`<li><span class="usual-day">${i === 1 ? 'Tmrw' : WEEKDAYS[weekdayOf(date)].slice(0, 3)}</span>
+        <span class="grow">${u.type === 'rest' ? '💤 Rest' : `${DAY_META[usualType(p, u)].icon} ${esc(exNames(p, u.ex, 3))}`}</span></li>`);
+    }
+    return rows.length ? `<div class="sub muted small">Coming up</div><ul class="list compact week-ahead">${rows.join('')}</ul>` : '';
+  }
+
   function trainingCard(p, t, done) {
     const type = dayType(p, t);
     const head = `<div class="card-head"><h2>Training</h2>${type ? `<span class="pill">${DAY_META[type].icon} ${DAY_META[type].short}</span>` : ''}</div>`;
-    if (!type) return `<section class="card">${head}<p class="muted">What's the plan today?</p>${dayTypePicker(p, t, true)}</section>`;
+    const usual = done.length ? '' : usualCard(p, t);
+    if (!type) return `<section class="card">${head}${usual}<p class="muted">What's the plan today?</p>${dayTypePicker(p, t, true)}${weekAhead(p, t)}</section>`;
     if (type === 'rest') {
       return `<section class="card">${head}
         <p class="muted">Rest day. Recover, hit your protein and sleep well.</p>
         <button class="btn block" data-action="tab" data-tab="workout">Change plan</button>
+        ${weekAhead(p, t)}
       </section>`;
     }
     return `<section class="card">${head}
@@ -572,8 +595,9 @@
           const ex = exById(p, e.exId);
           return `<li><span class="grow">${esc(ex.name)}</span><span class="muted small">${plural(e.sets.length, 'set')} · best ${setText(topSet(e.sets, ex), ex)}</span></li>`;
         }).join('')}</ul>`
-        : '<p class="muted">Nothing logged yet today.</p>'}
-      <button class="btn primary block" data-action="tab" data-tab="workout">${done.length ? 'Continue workout' : 'Start workout'}</button>
+        : usual || '<p class="muted">Nothing logged yet today.</p>'}
+      <button class="btn ${usual ? '' : 'primary '}block" data-action="tab" data-tab="workout">${done.length ? 'Continue workout' : usual ? 'Do something else' : 'Start workout'}</button>
+      ${weekAhead(p, t)}
     </section>`;
   }
 
@@ -645,7 +669,7 @@
       <section class="card">
         <div class="card-head"><h2>Gym membership</h2>${ms.state === 'none' ? '' : `<span class="pill ${ms.state}">${memberBadge}</span>`}</div>
         ${ms.state === 'none'
-          ? `<p class="muted">Add your fee expiry date and you'll get reminded before it runs out.</p><button class="btn block" data-action="tab" data-tab="more">Set expiry date</button>`
+          ? `<p class="muted">Add your fee expiry date and you'll see a warning here before it runs out.</p><button class="btn block" data-action="tab" data-tab="more">Set expiry date</button>`
           : `<p class="muted">Paid until ${L.fmtDate(m.end)}${m.fee ? ` · fee ${esc(m.fee)}` : ''}</p>`}
       </section>`;
   }
@@ -679,7 +703,10 @@
 
       <section class="card">
         <h2>Add food</h2>
-        <button class="btn primary block search-btn" data-action="open-foods">🔍 Search Indian foods</button>
+        <div class="row search-btn">
+          <button class="btn primary grow" data-action="open-foods">🔍 Search foods & brands</button>
+          <button class="btn" data-action="food-scan">📷 Scan</button>
+        </div>
         ${ui.foods.length ? `<div class="sub muted small">Quick add: tap to log again</div>
           <div class="chips scroll">${ui.foods.map((f, i) => `<button class="chip" data-action="quick-food" data-i="${i}">${esc(f.name)} <span class="muted">${f.cal} kcal · ${f.protein} g</span></button>`).join('')}</div>` : ''}
         <div class="sub muted small">Or type it in</div>
@@ -830,14 +857,14 @@
 
     let body = '';
     if (!type) {
-      body = `<p class="plan-q">What's the plan ${d === today() ? 'today' : 'for this day'}?</p>
+      body = `${usualCard(p, d)}<p class="plan-q">What's the plan ${d === today() ? 'today' : 'for this day'}?</p>
         <button class="btn block plan-start-btn" data-action="open-plans">📋 Or start from a workout plan</button>`;
     } else if (type === 'rest') {
       body = restCard(p, d) + entries.map((e) => exerciseCard(p, e)).join('');
     } else {
       body = `${type === 'hybrid' ? hybridCard(entries) : ''}
         ${entries.map((e) => exerciseCard(p, e)).join('')}
-        ${entries.length ? '' : `<section class="card empty">
+        ${entries.length ? '' : usualCard(p, d) || `<section class="card empty">
           <div class="empty-icon">${DAY_META[type].icon}</div>
           <h2>No exercises ${d === today() ? 'yet today' : 'on this day'}</h2>
           <p class="muted">${type === 'hybrid'
@@ -996,7 +1023,8 @@
         <button class="btn primary block search-btn" data-action="open-supps">📋 Choose from ${SUPP_LIST.length} supplements</button>
         ${p.supps.length ? `<ul class="list">${p.supps.map((s) => `<li>
           <div class="grow"><b>${esc(s.name)}</b> <span class="muted">${esc(s.dose)}</span>
-            <div class="muted small">${s.times.length ? s.times.map(L.fmt12).join(' & ') : 'Any time, no reminder'}</div></div>
+            ${s.brand || suppFood(s) ? `<div class="muted small">${esc(s.brand || '')}${s.brand && suppFood(s) ? ' · ' : ''}${suppFood(s) ? `${s.cal} kcal · ${s.protein} g protein, added to Diet when taken` : ''}</div>` : ''}
+            <div class="muted small">${s.times.length ? s.times.map(L.fmt12).join(' & ') : `Any time${REMINDERS ? ', no reminder' : ''}`}</div></div>
           <button class="icon-btn small" data-action="del-supp" data-id="${esc(s.id)}" aria-label="Delete ${esc(s.name)}">✕</button>
         </li>`).join('')}</ul>` : ''}
         <form data-form="supp" class="stack" autocomplete="off">
@@ -1005,9 +1033,25 @@
             <label>Dose<input name="dose" maxlength="20" placeholder="5 g"></label>
           </div>
           <div class="grid2">
-            <label>Reminder time<input name="t1" type="time" value="09:00"></label>
+            <label>${REMINDERS ? 'Reminder time' : 'Time'}<input name="t1" type="time" value="09:00"></label>
             <label>2nd time (optional)<input name="t2" type="time"></label>
           </div>
+          <details class="measure supp-food">
+            <summary>🍽️ Brand, calories & protein (whey, gainers…)</summary>
+            <div class="stack">
+              <label>Product<select name="product">
+                <option value="">Pick a brand to fill these in</option>
+                ${p.products.length ? `<optgroup label="My products">${p.products.map((f, i) => `<option value="mine:${i}">${esc(foodName(f))} · ${esc(f.serving)}</option>`).join('')}</optgroup>` : ''}
+                ${['Protein powders', 'Mass gainers', 'Protein bars'].map((cat) => `<optgroup label="${cat}">${FOOD_LIST.map((f, i) => (f.cat === cat ? `<option value="list:${i}">${esc(f.name)}</option>` : '')).join('')}</optgroup>`).join('')}
+              </select></label>
+              <label>Brand<input name="brand" maxlength="60" placeholder="e.g. MuscleBlaze Biozyme"></label>
+              <div class="grid2">
+                <label>Calories per dose<input name="cal" type="number" inputmode="numeric" min="0" max="3000" step="1"></label>
+                <label>Protein per dose (g)<input name="protein" type="number" inputmode="decimal" min="0" max="300" step="0.1"></label>
+              </div>
+              <p class="muted small">Ticking it off adds these to Diet, so your calories and protein stay exact.</p>
+            </div>
+          </details>
           <button class="btn">Add supplement</button>
         </form>
       </section>`;
@@ -1040,6 +1084,7 @@
     const others = db.profiles.filter((x) => x.id !== p.id);
 
     return `<h1 class="page-title">Settings</h1>
+      ${accountCard()}
       <section class="card">
         <div class="card-head"><h2>Friends</h2><span class="streak ${myStreak(p).count ? 'on' : ''}">${streakText(myStreak(p).count)}</span></div>
         <p class="muted small">${p.friends.length ? `${plural(p.friends.length, 'friend')}${p.lead ? ' · 👑 you lead workouts' : ''}${followed(p) ? ` · syncing ${esc(followed(p).name)}'s workout` : ''}` : 'Add friends to see each other\'s streaks and sync workouts.'}</p>
@@ -1100,7 +1145,7 @@
           </div>
           <div class="grid2">
             <label>Plan length (months)<input name="months" type="number" inputmode="numeric" min="1" max="24" value="${m.months}" required></label>
-            <label>Remind days before<input name="warnDays" type="number" inputmode="numeric" min="0" max="30" value="${m.warnDays}" required></label>
+            <label>${REMINDERS ? 'Remind' : 'Warn'} days before<input name="warnDays" type="number" inputmode="numeric" min="0" max="30" value="${m.warnDays}" required></label>
           </div>
           <button class="btn primary">Save membership</button>
         </form>
@@ -1113,7 +1158,7 @@
         ${watchSection()}
       </section>
 
-      <section class="card">
+      ${REMINDERS ? `<section class="card">
         <h2>Reminders</h2>
         ${notifSection()}
         ${GymNative.isIos ? `<div class="card sub-card" style="margin-top:1rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:0.85rem;">
@@ -1139,7 +1184,7 @@
           <p class="muted small" style="margin:0 0 0.75rem;line-height:1.5;">Browser PWAs pause background timers when closed or locked. Tap below to sync your water and supplement schedule directly to your phone's <b>Calendar app</b> (Apple Calendar / Google Calendar) — alarms will ring with sound even with your phone locked or the app completely closed!</p>
           <button class="btn primary block" data-action="ics">📲 Sync Alarms to Phone Calendar</button>
         </div>
-      </section>
+      </section>` : ''}
 
       <section class="card">
         <h2>Backup</h2>
@@ -1178,6 +1223,7 @@
         <label>Your name<input name="a" required maxlength="24" placeholder="e.g. Jai" autocomplete="given-name"></label>
         <button class="btn primary">Let's go</button>
       </form>
+      ${GymCloud.configured ? '<button class="btn block" data-action="cloud-signin-sheet">I already have an account: sign in</button>' : ''}
       <p class="muted small">Training with friends? Add them later to see each other's streaks and sync workouts.</p>
     </section>`;
   }
@@ -1255,48 +1301,196 @@
     return `<div class="sheet-head"><h2>${esc(ex.name)}</h2><button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button></div>${body}`;
   }
 
-  function foodListHtml(q) {
-    const query = (q || '').trim().toLowerCase();
-    const list = FOOD_LIST.map((f, i) => ({ f, i }))
-      .filter(({ f }) => (query ? `${f.name} ${f.cat}`.toLowerCase().includes(query) : ui.foodCat === 'All' || f.cat === ui.foodCat));
-    if (!list.length) return '<li class="muted pad">No match. Close this and type it in yourself.</li>';
-    let lastCat = null;
-    return list.map(({ f, i }) => {
-      const head = !query && ui.foodCat === 'All' && f.cat !== lastCat ? `<li class="pick-head">${esc(f.cat)}</li>` : '';
-      lastCat = f.cat;
-      return `${head}<li><button class="pick" data-action="food-pick" data-i="${i}">
-        <span>${esc(f.name)}<span class="muted small block">${esc(f.serving)}</span></span>
-        <span class="muted small nowrap">${f.cal} kcal · ${f.protein} g</span>
+  function foodRow(f, src, i) {
+    const missing = f.cal == null || f.protein == null;
+    return `<li><button class="pick" data-action="food-pick" data-src="${src}" data-i="${i}">
+        <span>${esc(foodName(f))}<span class="muted small block">${esc(f.serving)}</span></span>
+        <span class="muted small nowrap">${missing ? 'Add from label' : `${f.cal} kcal · ${f.protein} g`}</span>
       </button></li>`;
-    }).join('');
   }
 
+  // Search covers My products and the whole built-in list; with no search, the chosen group and category.
+  function foodListHtml(q) {
+    const words = (q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const all = [...me().products.map((f, i) => ({ f: { ...f, cat: 'My products' }, src: 'mine', i })), ...FOOD_LIST.map((f, i) => ({ f, src: 'list', i }))];
+    const list = words.length
+      ? all.filter(({ f }) => words.every((w) => `${foodName(f)} ${f.cat}`.toLowerCase().includes(w)))
+      : all.filter(({ f, src }) => (ui.foodGroup === 'mine' ? src === 'mine' : f.group === ui.foodGroup && (ui.foodCat === 'All' || f.cat === ui.foodCat)));
+    const heads = words.length || (ui.foodGroup !== 'mine' && ui.foodCat === 'All');
+    let lastCat = null;
+    let html = list.map(({ f, src, i }) => {
+      const head = heads && f.cat !== lastCat ? `<li class="pick-head">${esc(f.cat)}</li>` : '';
+      lastCat = f.cat;
+      return head + foodRow(f, src, i);
+    }).join('');
+    if (!list.length) {
+      html = words.length ? '<li class="muted pad">Not in the app\'s list.</li>'
+        : '<li class="muted pad">Products you add or scan are saved here, ready for next time.</li>';
+    }
+    return words.length ? html + webResultsHtml(q.trim()) : html;
+  }
+
+  function webResultsHtml(q) {
+    const w = ui.web;
+    if (q.length < 2) return '';
+    if (!w || w.q !== q) return `<li><button class="pick web-search" data-action="food-web"><span>🌐 Search every brand online for “${esc(q)}”</span></button></li>`;
+    if (w.status === 'loading') return '<li class="muted pad">🌐 Searching Open Food Facts…</li>';
+    if (w.status === 'error') return '<li class="muted pad">Couldn\'t search online right now (no internet, or the food database is busy). <button class="link" data-action="food-web">Try again</button></li>';
+    if (!w.items.length) return '<li class="muted pad">Nothing found online either. Tap <b>＋ Add a product</b> and copy it from the label.</li>';
+    return `<li class="pick-head">Online · Open Food Facts</li>${w.items.map((f, i) => foodRow(f, 'web', i)).join('')}`;
+  }
+
+  // Per-100 g foods step by 10 g; everything else by half servings.
+  const qtyStep = (f) => (/^100 (g|ml)$/.test(f.serving) ? 0.1 : 0.5);
   const foodTotal = (f, qty) => `<b>${Math.round(f.cal * qty)} kcal</b> · <b>${L.round2(f.protein * qty)} g</b> protein`;
 
   function foodSheet() {
     const close = '<button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button>';
-    if (ui.foodPick != null) {
-      const f = FOOD_LIST[ui.foodPick];
+    const head = (title) => `<div class="sheet-head"><button class="icon-btn" data-action="food-back" aria-label="Back to list">‹</button><h2 class="grow">${title}</h2>${close}</div>`;
+    if (ui.foodView === 'pick') {
+      const f = ui.foodPick;
       const type = ui.mealType || defaultMealType();
-      return `<div class="sheet-head"><button class="icon-btn" data-action="food-back" aria-label="Back to list">‹</button><h2 class="grow">${esc(f.name)}</h2>${close}</div>
+      const step = qtyStep(f);
+      return `${head(esc(foodName(f)))}
         <p class="muted">1 serving = ${esc(f.serving)} · ${f.cal} kcal · ${f.protein} g protein</p>
+        ${f.src === 'web' ? '<p class="muted small">From Open Food Facts. It\'s saved to ⭐ Mine when you add it.</p>' : ''}
         <div class="field">
           <span class="field-label">Servings</span>
           <div class="stepper qty">
-            <button type="button" data-action="food-qty" data-d="-0.5" aria-label="Fewer servings">−</button>
+            <button type="button" data-action="food-qty" data-d="${-step}" aria-label="Fewer servings">−</button>
             <output id="food-qty">${ui.foodQty}</output>
-            <button type="button" data-action="food-qty" data-d="0.5" aria-label="More servings">+</button>
+            <button type="button" data-action="food-qty" data-d="${step}" aria-label="More servings">+</button>
           </div>
         </div>
         <p class="food-total" id="food-total">${foodTotal(f, ui.foodQty)}</p>
         <label>Meal<select id="food-meal">${MEAL_TYPES.map((t) => `<option ${t === type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
-        <button class="btn primary block" data-action="food-add">Add to ${ui.date === today() ? 'today' : L.fmtDate(ui.date)}</button>`;
+        <button class="btn primary block" data-action="food-add">Add to ${ui.date === today() ? 'today' : L.fmtDate(ui.date)}</button>
+        ${f.src === 'mine' ? '<button class="link small block-link" data-action="product-edit">✏️ Edit this product</button>' : ''}`;
     }
-    return `<div class="sheet-head"><h2>Indian foods</h2>${close}</div>
-      <input class="search" type="search" id="food-search" placeholder="Search ${FOOD_LIST.length} foods: roti, paneer, dal…" autocomplete="off" enterkeyhint="search">
-      <div class="chips scroll" id="food-cats">${['All', ...Object.keys(L.FOODS)].map((c) => `<button class="chip ${c === ui.foodCat ? 'active' : ''}" data-action="food-cat" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-      <ul class="pick-list" id="food-list">${foodListHtml('')}</ul>
-      <p class="muted small">Typical home-style values. Restaurant portions are often bigger and richer.</p>`;
+    if (ui.foodView === 'scan') {
+      return `${head('Scan a barcode')}
+        <div class="scan-box"><video id="scan-video" playsinline muted></video><div class="scan-frame"></div></div>
+        <p class="muted small center" id="scan-status">Starting the camera…</p>
+        <form data-form="barcode" class="row" autocomplete="off">
+          <input name="code" inputmode="numeric" pattern="[0-9]{8,14}" maxlength="14" required placeholder="Or type the barcode number" aria-label="Barcode number">
+          <button class="btn">Look up</button>
+        </form>`;
+    }
+    if (ui.foodView === 'product') {
+      const d = ui.productDraft || {};
+      return `${head(d.id ? 'Edit product' : 'Add a product')}
+        ${ui.productNote ? `<p class="lead-note">${ui.productNote}</p>` : ''}
+        <form data-form="product" class="stack" autocomplete="off">
+          <label>Product<input name="name" required maxlength="60" value="${esc(d.name || '')}" placeholder="e.g. Biozyme Performance Whey"></label>
+          <label>Brand<input name="brand" maxlength="40" value="${esc(d.brand || '')}" placeholder="e.g. MuscleBlaze"></label>
+          <label>Serving<input name="serving" required maxlength="30" value="${esc(d.serving || '')}" placeholder="e.g. 1 scoop (33 g)"></label>
+          <div class="grid2">
+            <label>Calories (kcal)<input name="cal" type="number" inputmode="numeric" min="0" max="5000" step="1" required value="${d.cal ?? ''}"></label>
+            <label>Protein (g)<input name="protein" type="number" inputmode="decimal" min="0" max="500" step="0.1" required value="${d.protein ?? ''}"></label>
+          </div>
+          <p class="muted small">Copy them from the nutrition label, per serving.${d.code ? ` Barcode ${esc(d.code)}.` : ''}</p>
+          <button class="btn primary">Save product</button>
+          ${d.id ? `<button type="button" class="link danger small" data-action="product-del" data-id="${esc(d.id)}">Delete this product</button>` : ''}
+        </form>`;
+    }
+    const cats = FOOD_GROUPS[ui.foodGroup][1];
+    return `<div class="sheet-head"><h2>Foods & brands</h2>${close}</div>
+      <input class="search" type="search" id="food-search" value="${esc(ui.foodQuery)}" placeholder="Search ${FOOD_LIST.length} foods: roti, Dairy Milk, whey…" autocomplete="off" enterkeyhint="search">
+      <div class="row food-tools">
+        <button class="btn small grow" data-action="food-scan">📷 Scan barcode</button>
+        <button class="btn small grow" data-action="product-new">＋ Add a product</button>
+      </div>
+      <div class="seg" role="group" aria-label="Food list">${Object.entries(FOOD_GROUPS).map(([g, [label]]) => `<button class="seg-btn ${g === ui.foodGroup ? 'active' : ''}" data-action="food-group" data-g="${g}" aria-pressed="${g === ui.foodGroup}">${label}</button>`).join('')}</div>
+      ${cats ? `<div class="chips scroll" id="food-cats">${['All', ...Object.keys(cats)].map((c) => `<button class="chip ${c === ui.foodCat ? 'active' : ''}" data-action="food-cat" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
+      <ul class="pick-list" id="food-list">${foodListHtml(ui.foodQuery)}</ul>
+      <p class="muted small">Typical values: home-style for Indian food, label values for packaged food. Recipes change, so check your pack, or scan it for the exact label.</p>`;
+  }
+
+  // ---------- Online foods (Open Food Facts) ----------
+  const OFF_FIELDS = 'code,product_name,brands,serving_size,serving_quantity,quantity,nutriments';
+
+  // Indian listings first, then worldwide. { status: 'done' | 'error', items }
+  async function searchFoodsOnline(q) {
+    try {
+      let items = [];
+      for (const host of ['in', 'world']) {
+        const res = await fetch(`https://${host}.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=24&fields=${OFF_FIELDS}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        items = ((await res.json()).products || []).map(L.offFood).filter(Boolean);
+        if (items.length) break;
+      }
+      items.sort((a, b) => (a.cal == null) - (b.cal == null)); // complete labels first
+      return { status: 'done', items };
+    } catch (e) {
+      return { status: 'error', items: [] };
+    }
+  }
+
+  function refreshFoodList() {
+    const list = document.getElementById('food-list');
+    if (list && ui.foodView === 'list') list.innerHTML = foodListHtml(ui.foodQuery);
+  }
+
+  function showFood(f) {
+    ui.foodPick = f;
+    ui.foodQty = 1;
+    ui.foodView = 'pick';
+    openSheet(foodSheet());
+  }
+
+  function editProduct(draft, note = '') {
+    ui.productDraft = draft;
+    ui.productNote = note;
+    ui.foodView = 'product';
+    openSheet(foodSheet());
+  }
+
+  // Adds or updates one of My products (matched by id, barcode, or same name and brand).
+  function saveProduct(p, f) {
+    const item = { name: f.name, brand: f.brand || '', serving: f.serving, cal: f.cal, protein: f.protein, code: f.code || '' };
+    const key = foodName(item).toLowerCase();
+    const old = p.products.find((x) => (f.id && x.id === f.id) || (item.code && x.code === item.code) || foodName(x).toLowerCase() === key);
+    if (old) Object.assign(old, item);
+    else p.products.unshift({ id: uid(), ...item });
+    save();
+    return old || p.products[0];
+  }
+
+  async function startScan() {
+    const status = (msg) => { const el = $('#scan-status'); if (el) el.textContent = msg; };
+    if (!GymScan.supported()) return status('This browser can\'t use the camera. Type the barcode number instead.');
+    try {
+      await GymScan.start($('#scan-video'), lookupBarcode);
+      status('Point the camera at the barcode on the pack.');
+    } catch (e) {
+      status(e?.name === 'NotAllowedError'
+        ? 'Camera access is blocked. Allow the camera for this app in your phone\'s settings, or type the number.'
+        : 'Couldn\'t start the scanner. Type the barcode number instead.');
+    }
+  }
+
+  // Your saved products first (works offline), then Open Food Facts. Anything missing → fill from the label.
+  async function lookupBarcode(code) {
+    const mine = me().products.find((x) => x.code === code);
+    if (mine) return showFood({ ...mine, src: 'mine' });
+    const status = $('#scan-status');
+    if (status) status.textContent = `Looking up ${code}…`;
+    let food = null;
+    let failed = false;
+    try {
+      const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=${OFF_FIELDS}`);
+      const j = await res.json(); // "not found" is a 404 with { status: 0 }
+      if (j.status === 1) food = L.offFood({ ...j.product, code });
+    } catch (e) {
+      failed = true;
+    }
+    if ($('#sheet').hidden) return;
+    buzz(20);
+    if (food && food.cal != null && food.protein != null) return showFood({ ...food, src: 'web' });
+    editProduct({ ...food, code }, failed
+      ? 'Couldn\'t reach the food database. Add the product from its label once and it\'s saved for next time.'
+      : food ? `Found <b>${esc(foodName(food))}</b>, but without calories or protein on file. Copy them from the label once and it's saved for next time.`
+        : 'This barcode isn\'t in the food database yet. Add it from the label once and it\'s saved for next time.');
   }
 
   function suppListHtml(p, q) {
@@ -1358,12 +1552,14 @@
   }
 
   function openSheet(html) {
+    GymScan.stop();
     const s = $('#sheet');
     s.firstElementChild.innerHTML = html;
     s.hidden = false;
     document.body.classList.add('no-scroll');
   }
   function closeSheet() {
+    GymScan.stop();
     $('#sheet').hidden = true;
     document.body.classList.remove('no-scroll');
   }
@@ -1398,7 +1594,7 @@
   // Keep the screen on while the Workout tab is showing, counting steps, or running a rest timer.
   async function updateWakeLock() {
     const p = me();
-    const want = 'wakeLock' in navigator && !document.hidden && !!p && !isLocked(p) && (ui.tab === 'workout' || pedo.on || !!db.restRun);
+    const want = 'wakeLock' in navigator && !document.hidden && !!p && !isLocked(p) && (ui.tab === 'workout' || !!db.restRun);
     if (want && !wakeLock) {
       wakeLock = 'pending';
       try {
@@ -1653,6 +1849,7 @@
 
   // Notification for when rest ends, so it arrives even with the screen off.
   function restNotice() {
+    if (!REMINDERS) return;
     const r = db.restRun;
     if (GymNative.isNative) {
       if (ui.nativeNotif !== 'granted') return;
@@ -1707,7 +1904,7 @@
     buzz([200, 100, 200]);
     beep();
     toast('⏱ Rest over. Time for your next set 💪');
-    if (!GymNative.isNative && document.hidden) notify('Rest over 💪', 'Time for your next set.', 'rest');
+    if (REMINDERS && !GymNative.isNative && document.hidden) notify('Rest over 💪', 'Time for your next set.', 'rest');
   }
 
   function beep() {
@@ -1750,7 +1947,6 @@
 
   function deleteProfile(p) {
     // Don't leave the step counter or a watch recording for a profile that's gone.
-    if (pedo.on && pedo.pid === p.id) stopPedometer(true);
     if (hrm.status !== 'off' && hrm.pid === p.id) disconnectWatch();
     db.profiles = db.profiles.filter((x) => x !== p);
     db.activeId = db.profiles[0]?.id || null;
@@ -1758,6 +1954,172 @@
     ui.tab = 'today';
     save();
     render();
+  }
+
+  // ---------- Account & cloud backup ----------
+  // Signed in, every change is uploaded a few seconds later and other phones' changes are merged in
+  // (see GymLogic.merge3). db.cloud = { uid, email, rev, hashes, base, at }: where this phone last
+  // left the account, so the next sync only moves what changed.
+  let syncTimer = null;
+  let syncRun = null;
+
+  function queueSync(delay = 8000) {
+    if (!db.cloud?.uid) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(cloudSync, delay);
+  }
+
+  function cloudSync() {
+    if (!db.cloud?.uid || !GymCloud.configured || !me()) return Promise.resolve();
+    clearTimeout(syncTimer);
+    if (syncRun) {
+      queueSync(1500); // changes made during this sync go up right after it
+      return syncRun;
+    }
+    ui.cloudStatus = 'syncing';
+    updateCloudLine();
+    syncRun = (async () => {
+      try {
+        let done = false;
+        for (let i = 0; i < 3 && !done; i++) done = await syncOnce(); // false: another phone synced first, merge again
+        ui.cloudStatus = done ? 'ok' : 'error';
+        ui.cloudError = done ? '' : 'Another phone kept syncing at the same time.';
+      } catch (e) {
+        ui.cloudStatus = 'error';
+        ui.cloudError = GymCloud.errorText(e);
+      } finally {
+        syncRun = null;
+        updateCloudLine();
+      }
+    })();
+    return syncRun;
+  }
+
+  async function syncOnce() {
+    const st = db.cloud;
+    const user = await GymCloud.currentUser();
+    if (!user || user.uid !== st.uid) { // signed out elsewhere, e.g. after a password change
+      db.cloud = null;
+      save(false);
+      render();
+      return true;
+    }
+    const meta = await GymCloud.getMeta(st.uid);
+    const cloudHashes = meta.hashes || {};
+    const start = L.splitChunks(me());
+    const names = [...new Set([...Object.keys(start), ...Object.keys(cloudHashes)])];
+    const changed = names.filter((n) => cloudHashes[n] && cloudHashes[n] !== st.hashes[n]);
+    const fetched = changed.length ? await GymCloud.getChunks(st.uid, changed) : {};
+    const merged = {};
+    const upload = {};
+    const hashes = {};
+    for (const n of names) {
+      merged[n] = (n in fetched ? L.merge3(start[n], fetched[n], st.base[n]) : start[n]) ?? {};
+      hashes[n] = L.hashOf(merged[n]);
+      if (hashes[n] !== cloudHashes[n]) upload[n] = merged[n];
+    }
+    const rev = meta.rev || 0;
+    const pushed = Object.keys(upload).length > 0;
+    if (pushed && !(await GymCloud.commit(st.uid, rev, upload, Object.fromEntries(Object.keys(upload).map((n) => [n, hashes[n]]))))) return false;
+
+    // Apply, keeping anything changed on this phone while the sync was running.
+    const p = me();
+    const now = L.splitChunks(p);
+    const result = {};
+    for (const n of new Set([...names, ...Object.keys(now)])) {
+      const m = L.merge3(now[n], merged[n], start[n] === undefined ? undefined : L.syncBase(start[n]));
+      if (m !== undefined) result[n] = m;
+    }
+    const next = normalizeProfile({ ...L.joinChunks(result), ...Object.fromEntries(L.LOCAL_ONLY.map((k) => [k, p[k]])) });
+    const changedHere = L.hashOf(L.splitChunks(next)) !== L.hashOf(now);
+    db.profiles = db.profiles.map((x) => (x === p ? next : x));
+    if (db.activeId === p.id) db.activeId = next.id; // a new phone takes the account's profile id
+    if (ui.unlocked.has(p.id)) ui.unlocked.add(next.id);
+    Object.assign(st, {
+      rev: rev + (pushed ? 1 : 0),
+      hashes,
+      base: Object.fromEntries(names.map((n) => [n, L.syncBase(merged[n])])),
+      at: Date.now(),
+    });
+    save(false);
+    if (L.hashOf(result) !== L.hashOf(merged)) queueSync(1500); // edits made while syncing
+    if (changedHere && !isTyping() && $('#sheet').hidden) render();
+    return true;
+  }
+
+  function cloudLine() {
+    if (ui.cloudStatus === 'syncing') return '☁️ Syncing…';
+    if (ui.cloudStatus === 'error') return `<span class="warn-text">⚠️ ${esc(ui.cloudError)}</span> It will try again.`;
+    const at = db.cloud?.at;
+    if (!at) return 'Not synced yet.';
+    const mins = Math.round((Date.now() - at) / 60000);
+    const when = mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago` : L.ymd(new Date(at)) === today() ? `at ${L.fmtClock(at)}` : `on ${L.fmtDate(L.ymd(new Date(at)))}`;
+    return `✅ Backed up ${when}`;
+  }
+  function updateCloudLine() {
+    const el = document.getElementById('cloud-line');
+    if (el) el.innerHTML = cloudLine();
+  }
+
+  function accountForm(signInOnly) {
+    return `<form data-form="account" class="stack" autocomplete="on">
+        <label>Email<input name="email" type="email" autocomplete="email" required maxlength="100"></label>
+        <label>Password<input name="pw" type="password" autocomplete="${signInOnly ? 'current-password' : 'new-password'}" minlength="6" required></label>
+        <div class="row">
+          ${signInOnly ? '' : '<button type="button" class="btn primary grow" data-action="cloud-signup">Create account</button>'}
+          <button type="button" class="btn ${signInOnly ? 'primary ' : ''}grow" data-action="cloud-signin">Sign in</button>
+        </div>
+        <button type="button" class="link small" data-action="cloud-reset">Forgot password?</button>
+      </form>`;
+  }
+
+  function accountCard() {
+    if (!GymCloud.configured) return '';
+    if (!db.cloud?.uid) {
+      return `<section class="card" id="account-card">
+        <h2>Account & backup</h2>
+        <p class="muted">Save your logs to an account with your email. Everything is backed up automatically, and you can sign in on another phone or on the website and carry on where you left off.</p>
+        ${accountForm(false)}
+      </section>`;
+    }
+    return `<section class="card" id="account-card">
+      <div class="card-head"><h2>Account & backup</h2><span class="pill ok">☁️ On</span></div>
+      <p><b>${esc(db.cloud.email)}</b></p>
+      <p class="muted small" id="cloud-line">${cloudLine()}</p>
+      <div class="row">
+        <button class="btn grow" data-action="cloud-sync">Sync now</button>
+        <button class="btn grow" data-action="cloud-signout-sheet">Sign out</button>
+      </div>
+      <button class="link danger small block-link" data-action="cloud-delete-sheet">Delete account</button>
+    </section>`;
+  }
+
+  // Signs in (or creates the account), then merges this phone's logs with the account's.
+  async function cloudAuth(create) {
+    const f = $('form[data-form="account"]');
+    if (!f.reportValidity()) return;
+    const email = f.elements.email.value.trim();
+    const pw = f.elements.pw.value;
+    f.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try {
+      const user = create ? await GymCloud.signUp(email, pw) : await GymCloud.signIn(email, pw);
+      if (!me()) { // a new phone: start from an empty profile and let the account fill it in
+        const p = defaultProfile(email.split('@')[0].slice(0, 24));
+        db.profiles.push(p);
+        db.activeId = p.id;
+      }
+      db.cloud = { uid: user.uid, email: user.email, rev: 0, hashes: {}, base: {}, at: 0 };
+      save(false);
+      closeSheet();
+      render();
+      await cloudSync();
+      toast(ui.cloudStatus === 'ok'
+        ? (create ? '✅ Account created. Your logs are backed up.' : '✅ Signed in. Your logs are synced.')
+        : `Signed in, but couldn't sync yet: ${esc(ui.cloudError)}`);
+    } catch (e) {
+      toast(esc(GymCloud.errorText(e)), 5000);
+      f.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+    }
   }
 
   async function importFile(input) {
@@ -1836,7 +2198,7 @@
     clearTimeout(reminderTimer);
     reminderTimer = setTimeout(async () => {
       const p = me();
-      const list = p ? L.nativeReminders(p, Date.now()) : [];
+      const list = p && REMINDERS ? L.nativeReminders(p, Date.now()) : []; // off: clears any already scheduled
       const key = JSON.stringify(list);
       if (!force && key === remindersSent) return;
       try {
@@ -1850,7 +2212,7 @@
   // via the Notification Triggers API if supported in the browser.
   let pwaTriggerTimer = null;
   function schedulePwaTriggers(p) {
-    if (GymNative.isNative || notifState() !== 'granted') return;
+    if (!REMINDERS || GymNative.isNative || notifState() !== 'granted') return;
     if (!('serviceWorker' in navigator) || !('showTrigger' in Notification.prototype) || typeof TimestampTrigger === 'undefined') return;
     clearTimeout(pwaTriggerTimer);
     pwaTriggerTimer = setTimeout(async () => {
@@ -1893,73 +2255,16 @@
     }, 1200);
   }
 
-  // Today's steps from Health Connect. Steps counted live since the last reading stay on top
-  // until Health Connect catches up.
-  async function refreshHealth() {
-    if (!GymNative.isNative || ui.health !== 'granted') return;
-    let n;
-    try {
-      n = await GymNative.stepsToday();
-    } catch (e) {
-      return;
-    }
-    const p = me();
-    if (!p) return;
-    const t = today();
-    const rec = p.steps[t] || (p.steps[t] = {});
-    rec.health = n;
-    if (live.day !== t || n >= live.base + live.extra) Object.assign(live, { day: t, base: n, extra: 0 });
-    rec.live = live.base + live.extra;
-    save();
-    updateLive();
-  }
-
-  function onLiveMotion(e) {
-    const a = e.accelerationIncludingGravity;
-    if (!a || a.x == null) return;
-    const n = live.push(a.x, a.y, a.z, e.timeStamp || performance.now());
-    const p = n && me();
-    if (!p) return;
-    const t = today();
-    if (live.day !== t) Object.assign(live, { day: t, base: 0, extra: 0 }); // just past midnight
-    live.extra += n;
-    const rec = p.steps[t] || (p.steps[t] = {});
-    rec.live = live.base + live.extra;
-    if (Date.now() - live.lastSave > 10000) {
-      live.lastSave = Date.now();
-      save();
-    }
-    updateLive();
-  }
-
-  // While the app is open, the phone's motion sensor adds steps right away.
-  function startLive() {
-    if (live.on || !GymNative.isNative || ui.health !== 'granted' || document.hidden || !('DeviceMotionEvent' in window)) return;
-    Object.assign(live, { on: true, push: L.createStepDetector() });
-    window.addEventListener('devicemotion', onLiveMotion);
-  }
-  function stopLive() {
-    if (!live.on) return;
-    live.on = false;
-    window.removeEventListener('devicemotion', onLiveMotion);
-    save();
-  }
-
   async function initNative() {
     if (!GymNative.isNative) return;
     ui.nativeNotif = nativePerm(await GymNative.notifPermission(false));
-    ui.health = await GymNative.stepsAccess();
-    if (ui.health === 'granted') {
-      await refreshHealth();
-      startLive();
-    }
     queueNativeReminders(true);
     if (!isTyping() && $('#sheet').hidden) render();
   }
 
   // Runs every 30 s; each reminder fires once.
   function checkReminders() {
-    if (GymNative.isNative) return; // the app schedules them with Android instead
+    if (!REMINDERS || GymNative.isNative) return; // the app schedules them with Android instead
     const now = Date.now();
     const t = L.ymd();
     const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
@@ -2008,11 +2313,10 @@
   }
 
   // ---------- Steps & watch ----------
-  // Floating pill above the tabs while the step counter or a watch is running.
+  // Floating pill above the tabs while a watch is connected.
   function updateLive(cards = true) {
     const p = me();
     const bits = [];
-    if (pedo.on) bits.push(`👟 ${fmtInt(pedo.session)} steps`);
     if (hrm.status === 'on') bits.push(`❤️ ${hrm.bpm || '--'} bpm`);
     else if (hrm.status !== 'off') bits.push('❤️ connecting…');
     const live = $('#live');
@@ -2025,54 +2329,6 @@
     if (rings) rings.outerHTML = ringsCard(p, today());
     const line = $('#hr-line');
     if (line) line.outerHTML = hrLine(p, ui.date);
-  }
-
-  function onMotion(e) {
-    const a = e.accelerationIncludingGravity;
-    if (!a || a.x == null) return;
-    pedo.gotData = true;
-    const n = pedo.push(a.x, a.y, a.z, e.timeStamp || performance.now());
-    const p = n && db.profiles.find((x) => x.id === pedo.pid);
-    if (!p) return;
-    const rec = p.steps[today()] || (p.steps[today()] = {});
-    rec.phone = (rec.phone || 0) + n;
-    pedo.session += n;
-    if (Date.now() - pedo.lastSave > 5000) {
-      pedo.lastSave = Date.now();
-      save();
-    }
-    updateLive();
-  }
-
-  async function startPedometer() {
-    if (!('DeviceMotionEvent' in window)) return toast('This device has no motion sensor. Enter steps from your watch instead.');
-    // iPhone asks for motion access, and only from a tap.
-    if (typeof DeviceMotionEvent.requestPermission === 'function') {
-      try {
-        if (await DeviceMotionEvent.requestPermission() !== 'granted') return toast('Motion access was blocked. Allow it for this site in Safari settings.');
-      } catch (e) {
-        return toast('Couldn\'t get motion access.');
-      }
-    }
-    Object.assign(pedo, { on: true, push: L.createStepDetector(), session: 0, pid: me().id, gotData: false, lastSave: Date.now() });
-    window.addEventListener('devicemotion', onMotion);
-    render();
-    setTimeout(() => {
-      if (pedo.on && !pedo.gotData) {
-        stopPedometer(true);
-        toast('No motion sensor found here. Use a phone, or enter steps from your watch.');
-      }
-    }, 3000);
-  }
-
-  function stopPedometer(quiet) {
-    window.removeEventListener('devicemotion', onMotion);
-    const n = pedo.session;
-    pedo.on = false;
-    save();
-    render();
-    updateLive();
-    if (!quiet) toast(n ? `👟 ${fmtInt(n)} steps added to today` : 'No steps picked up. Walk with the phone in your hand or pocket.');
   }
 
   async function connectWatch() {
@@ -2153,13 +2409,13 @@
 
   function stepsSheet(p) {
     const rec = p.steps[today()] || {};
-    return `<div class="sheet-head"><h2>Steps from your watch</h2><button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button></div>
-      <p class="muted small">Open your watch's app (Noise Fit, boAt Crest, Zepp, Galaxy Wearable, Garmin Connect…) or your phone's Health / Fit app and type today's step count.</p>
+    return `<div class="sheet-head"><h2>Today's steps</h2><button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button></div>
+      <p class="muted small">Automatic step counting isn't supported yet. Open your phone's Health / Fit app or your watch's app (Samsung Health, Google Fit, Apple Health, Noise Fit, boAt Crest, Zepp…) and type today's step count.</p>
       <form data-form="steps-manual" class="stack" autocomplete="off">
         <label>Today's steps<input name="steps" type="number" inputmode="numeric" min="0" max="200000" value="${rec.manual ?? ''}" placeholder="e.g. 8450" required></label>
         <button class="btn primary">Save</button>
       </form>
-      <p class="muted small">${rec.phone ? `The phone counted ${fmtInt(rec.phone)} today. ` : ''}The app uses whichever number is higher, so steps are never counted twice.</p>`;
+      `;
   }
 
   // ---------- Event handling ----------
@@ -2204,11 +2460,23 @@
       const t = today();
       const { id, slot } = el.dataset;
       const taken = L.findTaken(p.suppLog, id, slot, t);
-      if (taken) p.suppLog = p.suppLog.filter((l) => l !== taken);
-      else p.suppLog.push({ id: uid(), suppId: id, slot, date: t, ts: Date.now() });
+      const supp = p.supps.find((s) => s.id === id);
+      let added = null;
+      if (taken) {
+        p.suppLog = p.suppLog.filter((l) => l !== taken);
+        p.meals = p.meals.filter((m) => m.suppLog !== taken.id); // and its diet entry
+      } else {
+        const log = { id: uid(), suppId: id, slot, date: t, ts: Date.now() };
+        p.suppLog.push(log);
+        if (supp && suppFood(supp)) {
+          added = { id: uid(), date: t, ts: log.ts, name: `${supp.brand || supp.name}${supp.dose ? ` · ${supp.dose}` : ''}`, cal: supp.cal, protein: supp.protein, type: defaultMealType(), suppLog: log.id };
+          p.meals.push(added);
+        }
+      }
       save();
       render();
       buzz();
+      if (added) toast(`Added to Diet: ${added.cal} kcal · ${added.protein} g protein`);
     },
     'del-supp'(el) {
       const p = me();
@@ -2228,30 +2496,8 @@
       save();
       render();
     },
-    'pedo-toggle'() {
-      if (pedo.on) stopPedometer();
-      else startPedometer();
-      buzz();
-    },
     'steps-manual'() {
       openSheet(stepsSheet(me()));
-    },
-    async 'health-connect'() {
-      const res = await GymNative.requestSteps();
-      ui.health = res === 'unsupported' ? 'unavailable' : res;
-      if (res === 'granted') {
-        await refreshHealth();
-        startLive();
-        toast('📲 All-day steps are on');
-      } else if (res === 'unavailable') {
-        toast('Health Connect isn\'t available. Install or update "Health Connect" from the Play Store.');
-      } else {
-        toast('Steps access wasn\'t allowed. You can turn it on in Health Connect settings.');
-      }
-      render();
-    },
-    'health-settings'() {
-      GymNative.openHealthSettings();
     },
     'ios-health'() {
       window.location.href = 'x-apple-health://';
@@ -2322,36 +2568,134 @@
       toast('HYROX simulation added: 8 × 1 km runs + 8 stations');
     },
     'open-foods'() {
-      ui.foodPick = null;
+      ui.foodView = 'list';
+      ui.foodQuery = '';
+      openSheet(foodSheet());
+    },
+    'food-group'(el) {
+      ui.foodGroup = el.dataset.g;
+      ui.foodCat = 'All';
+      ui.foodQuery = '';
       openSheet(foodSheet());
     },
     'food-cat'(el) {
       ui.foodCat = el.dataset.c;
       document.querySelectorAll('#food-cats .chip').forEach((c) => c.classList.toggle('active', c.dataset.c === ui.foodCat));
-      $('#food-list').innerHTML = foodListHtml($('#food-search').value);
+      refreshFoodList();
     },
     'food-pick'(el) {
-      ui.foodPick = +el.dataset.i;
-      ui.foodQty = 1;
-      openSheet(foodSheet());
+      const src = el.dataset.src;
+      const i = +el.dataset.i;
+      const f = src === 'mine' ? me().products[i] : src === 'web' ? ui.web.items[i] : FOOD_LIST[i];
+      if (f.cal == null || f.protein == null) return editProduct({ ...f }, 'Open Food Facts doesn\'t have its calories or protein. Copy them from the label once and it\'s saved for next time.');
+      showFood({ ...f, src });
     },
     'food-back'() {
-      ui.foodPick = null;
+      ui.foodView = 'list';
+      openSheet(foodSheet());
+    },
+    async 'food-web'() {
+      const q = ui.foodQuery.trim();
+      if (q.length < 2 || (ui.web?.q === q && ui.web.status === 'loading')) return;
+      ui.web = { q, status: 'loading', items: [] };
+      refreshFoodList();
+      const result = await searchFoodsOnline(q);
+      if (ui.web?.q !== q) return; // a newer search started
+      ui.web = { q, ...result };
+      refreshFoodList();
+    },
+    'food-scan'() {
+      ui.foodView = 'scan';
+      openSheet(foodSheet());
+      startScan();
+    },
+    'cloud-signin-sheet'() {
+      openSheet(`<div class="sheet-head"><h2 class="grow">Sign in</h2><button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button></div>
+        <p class="muted">Your logs, goals and settings come back from your account.</p>
+        ${accountForm(true)}`);
+    },
+    'cloud-signup'() {
+      cloudAuth(true);
+    },
+    'cloud-signin'() {
+      cloudAuth(false);
+    },
+    async 'cloud-reset'() {
+      const email = $('form[data-form="account"] [name="email"]')?.value.trim();
+      if (!email) return toast('Type your email first, then tap Forgot password.');
+      try {
+        await GymCloud.resetPassword(email);
+        toast(`Password reset link sent to ${esc(email)}. Check spam too.`, 5000);
+      } catch (e) {
+        toast(esc(GymCloud.errorText(e)), 5000);
+      }
+    },
+    async 'cloud-sync'() {
+      await cloudSync();
+      if (ui.cloudStatus === 'ok') toast('✅ Synced');
+    },
+    'cloud-signout-sheet'() {
+      openSheet(`<div class="sheet-head"><h2 class="grow">Sign out</h2><button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button></div>
+        <p class="muted">Your logs stay safe in your account (${esc(db.cloud.email)}). Sign in again any time to get them back.</p>
+        <div class="stack">
+          <button class="btn block" data-action="cloud-signout" data-wipe="0">Sign out, keep my logs on this phone</button>
+          <button class="btn block" data-action="cloud-signout" data-wipe="1">Sign out and remove my logs from this phone</button>
+        </div>`);
+    },
+    async 'cloud-signout'(el) {
+      const wipe = el.dataset.wipe === '1';
+      await cloudSync(); // send the latest changes first
+      if (wipe && ui.cloudStatus === 'error' && !confirm(`Your latest changes couldn't be backed up (${ui.cloudError}). Remove them from this phone anyway?`)) return;
+      try { await GymCloud.signOut(); } catch (e) { /* offline: this phone forgets the account anyway */ }
+      db.cloud = null;
+      ui.cloudStatus = 'idle';
+      closeSheet();
+      if (wipe && me()) deleteProfile(me());
+      else {
+        save(false);
+        render();
+      }
+      toast('Signed out');
+    },
+    'cloud-delete-sheet'() {
+      openSheet(`<div class="sheet-head"><h2 class="grow">Delete account</h2><button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button></div>
+        <p>This permanently deletes your account <b>${esc(db.cloud.email)}</b> and everything backed up in it. The logs on this phone are kept.</p>
+        <form data-form="cloud-delete" class="stack">
+          <label>Your password<input name="pw" type="password" autocomplete="current-password" required></label>
+          <button class="btn danger block">Delete my account</button>
+        </form>`);
+    },
+    'product-new'() {
+      editProduct({ name: ui.foodQuery.trim() });
+    },
+    'product-edit'() {
+      editProduct({ ...ui.foodPick });
+    },
+    'product-del'(el) {
+      const p = me();
+      const item = p.products.find((x) => x.id === el.dataset.id);
+      if (!item || !confirm(`Delete "${foodName(item)}" from My products?`)) return;
+      p.products = p.products.filter((x) => x !== item);
+      save();
+      ui.foodView = 'list';
+      ui.foodGroup = 'mine';
       openSheet(foodSheet());
     },
     'food-qty'(el) {
-      ui.foodQty = Math.max(0.5, Math.min(20, ui.foodQty + +el.dataset.d));
+      const step = qtyStep(ui.foodPick);
+      ui.foodQty = L.round2(Math.max(step, Math.min(20, ui.foodQty + +el.dataset.d)));
       $('#food-qty').textContent = ui.foodQty;
-      $('#food-total').innerHTML = foodTotal(FOOD_LIST[ui.foodPick], ui.foodQty);
+      $('#food-total').innerHTML = foodTotal(ui.foodPick, ui.foodQty);
       buzz(8);
     },
     'food-add'() {
-      const f = FOOD_LIST[ui.foodPick];
+      const f = ui.foodPick;
       const q = ui.foodQty;
       const type = $('#food-meal').value;
+      if (f.src === 'web') saveProduct(me(), f);
       closeSheet();
       addMeal({
-        name: `${f.name} · ${q === 1 ? f.serving : `${q} × ${f.serving}`}`,
+        name: `${foodName(f)} · ${q === 1 ? f.serving : `${q} × ${f.serving}`}`,
         cal: Math.round(f.cal * q),
         protein: L.round2(f.protein * q),
         type,
@@ -2369,6 +2713,7 @@
       f.elements.dose.value = s.dose;
       f.elements.t1.value = s.times[0] || '';
       f.elements.t2.value = s.times[1] || '';
+      if (s.cat === 'Protein') f.querySelector('.supp-food').open = true; // whey, gainers: ask for the brand
       f.scrollIntoView({ behavior: 'smooth', block: 'center' });
       toast(`${esc(s.name)}: ${esc(s.note)}. Check the time, then tap Add supplement.`, 5000);
     },
@@ -2384,6 +2729,19 @@
     },
     'add-ex'(el) {
       addExercise(el.dataset.id);
+    },
+    'load-usual'(el) {
+      const p = me();
+      const d = el.dataset.date;
+      const u = usualFor(p, d);
+      if (!u || !u.ex.length) return;
+      if (!p.days[d] && u.type) p.days[d] = u.type;
+      addToWorkout(p, d, u.ex);
+      ui.date = d;
+      ui.openEx = u.ex[0];
+      ui.tab = 'workout';
+      render();
+      toast(`📅 ${plural(u.ex.length, 'exercise')} loaded`);
     },
     'repeat-day'(el) {
       const p = me();
@@ -2597,6 +2955,42 @@
       render();
       toast('Password saved 🔒');
     },
+    product(f, fd) {
+      const item = {
+        id: ui.productDraft?.id,
+        code: ui.productDraft?.code,
+        name: fd.get('name').trim(),
+        brand: fd.get('brand').trim(),
+        serving: fd.get('serving').trim(),
+        cal: Math.round(+fd.get('cal')),
+        protein: L.round2(+fd.get('protein')),
+      };
+      if (!item.name || !item.serving || !(item.cal >= 0) || !(item.protein >= 0)) return;
+      showFood({ ...saveProduct(me(), item), src: 'mine' });
+      toast('⭐ Saved. It\'s under ⭐ Mine next time.');
+    },
+    async 'cloud-delete'(f, fd) {
+      const btn = f.querySelector('button');
+      btn.disabled = true;
+      try {
+        await GymCloud.deleteAccount(fd.get('pw'));
+        db.cloud = null;
+        ui.cloudStatus = 'idle';
+        save(false);
+        closeSheet();
+        render();
+        toast('Account deleted. The logs on this phone are kept.', 5000);
+      } catch (e) {
+        toast(esc(GymCloud.errorText(e)), 5000);
+        btn.disabled = false;
+      }
+    },
+    barcode(f, fd) {
+      const code = fd.get('code').replace(/\D/g, '');
+      if (code.length < 8) return toast('A barcode has 8 to 14 digits');
+      GymScan.stop();
+      lookupBarcode(code);
+    },
     meal(f, fd) {
       const name = fd.get('name').trim();
       const cal = Math.round(+fd.get('cal'));
@@ -2632,10 +3026,13 @@
       const name = fd.get('name').trim();
       if (!name) return;
       const times = [...new Set([fd.get('t1'), fd.get('t2')].filter(Boolean))];
-      me().supps.push({ id: uid(), name, dose: fd.get('dose').trim(), times, created: today() });
+      const num = (k, round) => (fd.get(k) === '' ? null : round(+fd.get(k)));
+      const cal = num('cal', Math.round);
+      const protein = num('protein', L.round2);
+      me().supps.push({ id: uid(), name, dose: fd.get('dose').trim(), times, created: today(), brand: fd.get('brand').trim(), cal: cal ?? (protein != null ? 0 : null), protein: protein ?? (cal != null ? 0 : null) });
       save();
       render();
-      toast(`${esc(name)} added${times.length ? `. Reminder at ${times.map(L.fmt12).join(' & ')}` : ''}`);
+      toast(`${esc(name)} added${times.length && REMINDERS ? `. Reminder at ${times.map(L.fmt12).join(' & ')}` : ''}`);
     },
     goals(f, fd) {
       const p = me();
@@ -2768,7 +3165,8 @@
     if (t.id === 'ex-search') {
       $('#ex-list').innerHTML = pickListHtml(me(), t.value);
     } else if (t.id === 'food-search') {
-      $('#food-list').innerHTML = foodListHtml(t.value);
+      ui.foodQuery = t.value;
+      refreshFoodList();
     } else if (t.id === 'supp-search') {
       $('#supp-list').innerHTML = suppListHtml(me(), t.value);
     } else if (form === 'set' && t.name === 'w') {
@@ -2794,6 +3192,16 @@
   document.addEventListener('change', (e) => {
     if (e.target.matches('[data-import]')) {
       importFile(e.target);
+    } else if (e.target.matches('form[data-form="supp"] [name="product"]')) {
+      // Picking a protein powder / gainer fills in its brand, serving and nutrition.
+      const [src, i] = e.target.value.split(':');
+      const f = src === 'mine' ? me().products[+i] : FOOD_LIST[+i];
+      if (!f) return;
+      const el = e.target.form.elements;
+      el.brand.value = foodName(f);
+      el.dose.value = f.serving.slice(0, 20);
+      el.cal.value = f.cal;
+      el.protein.value = f.protein;
     } else if (e.target.matches('[data-time]')) {
       // Tidy number-pad entry: "405" → "4:05".
       const sec = L.parseDur(e.target.value);
@@ -2814,6 +3222,11 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet();
+    // The keyboard's search key looks the food up online too.
+    if (e.key === 'Enter' && e.target.id === 'food-search') {
+      e.target.blur();
+      ACTIONS['food-web']();
+    }
   });
 
   // Hide the bottom tabs while the on-screen keyboard is up.
@@ -2835,18 +3248,16 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       ui.hiddenAt = Date.now();
-      if (pedo.on || hrm.status !== 'off') save(); // steps and heart rate are saved in batches
-      stopLive();
+      if (hrm.status !== 'off') save(); // heart rate is saved in batches
+      if (syncTimer) cloudSync(); // upload a pending change before the phone suspends the app
       return;
     }
+    if (db.cloud?.uid && Date.now() - (db.cloud.at || 0) > 60000) cloudSync(); // pick up other phones' changes
     if (ui.hiddenAt && Date.now() - ui.hiddenAt > AUTO_LOCK_MS) ui.unlocked.clear();
     if (db.restRun && db.restRun.end <= Date.now()) updateRest();
     checkReminders();
     if (typeof schedulePwaTriggers === 'function') schedulePwaTriggers();
     syncTick();
-    // App: catch up on steps taken while it was closed, then count live again.
-    refreshHealth();
-    startLive();
     queueNativeReminders();
     if (!isTyping() && $('#sheet').hidden) render();
     else updateWakeLock();
@@ -2862,7 +3273,10 @@
     render();
   });
 
-  window.addEventListener('online', syncTick);
+  window.addEventListener('online', () => {
+    syncTick();
+    cloudSync();
+  });
 
   if (db.restRun && db.restRun.end < Date.now() - 3000) db.restRun = null;
   render();
@@ -2872,11 +3286,11 @@
   }
   checkReminders();
   syncTick();
+  setTimeout(cloudSync, 1000);
   initNative();
   setInterval(() => {
     checkReminders();
     syncTick();
-    if (!document.hidden) refreshHealth();
   }, 30000);
   // The app ships its files inside the APK, so only the website needs the offline cache.
   if (!GymNative.isNative && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {

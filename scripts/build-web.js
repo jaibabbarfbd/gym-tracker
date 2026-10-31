@@ -13,7 +13,7 @@ for (const entry of ENTRIES) {
 }
 
 // Write version.json into www/ so the APK knows its own build number.
-// BUILD_NUMBER is set by the CI workflow (github.run_number); defaults to 0 locally.
+// BUILD_NUMBER is set by the CI workflows (the commit count, same for the APK and the website); 0 locally.
 const buildNumber = parseInt(process.env.BUILD_NUMBER || '0', 10);
 const versionJson = JSON.stringify({ build: buildNumber });
 fs.writeFileSync(path.join(OUT, 'version.json'), versionJson);

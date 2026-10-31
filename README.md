@@ -1,16 +1,16 @@
 # Gym Tracker
 
-A personal workout, diet, water, steps, supplement and gym-fee tracker, with friends' streaks and workout sync. It's plain HTML/CSS/JS with no build step and no dependencies. It works offline and can be installed on a phone like an app.
+A personal workout, diet, water, steps, supplement and gym-fee tracker, with friends' streaks and workout sync. It's plain HTML/CSS/JS with no build step. It works offline and can be installed on a phone like an app.
 
 ## What it does
 
 - **Diet**: log meals with calories and protein against daily goals.
-  - **Search Indian foods**: 188 foods in 14 categories (roti & breads, rice & biryani, dal, paneer & dairy, eggs, chicken/meat/fish, sabzi, South Indian, snacks, street food, sweets, drinks, fruits & nuts, gym staples), each with a typical serving. Pick one, set the number of servings in steps of 0.5, and it's logged with the calories and protein worked out.
+  - **Search foods & brands**: 188 Indian foods (roti, dal, paneer, biryani, South Indian, street food, sweets…) and 156 branded packaged foods: protein powders (ON, MuscleBlaze, Dymatize, MyProtein…), mass gainers, protein bars, Amul and Epigamia dairy, chocolates, chips & namkeen, biscuits, toffees and candy, cold drinks, spreads, cereals and noodles. Set the number of servings and it's logged with the calories and protein worked out.
+  - **🌐 Search every brand online** and **📷 Scan a barcode**: looks the product up in Open Food Facts with its label values per serving. If it isn't there (or has no calories on file), copy it from the label once.
+  - **⭐ My products**: products you add or scan are saved for next time, offline too.
   - Or type any food in yourself. Foods you've logged before autofill and show up as one-tap "quick add" chips.
-- **Water**: +250 ml / +500 ml buttons, and a reminder every N minutes between the hours you choose.
-- **Steps**: daily step goal (default 10,000, change it in More), with distance and a 7-day average and best.
-  - **👟 Count with phone**: counts steps with the phone's motion sensor while the app is **open** (in your hand or pocket; the screen stays on). Phones stop this when the screen turns off or you switch apps, so it's for walks and runs, not all-day counting. On iPhone, allow motion access when asked.
-  - **⌚ Enter from watch**: type today's count from your watch's app or your phone's Health / Fit app. Phone and watch steps overlap, so the day uses whichever is **higher**, never the sum.
+- **Water**: +250 ml / +500 ml buttons against your daily goal.
+- **Steps**: typed in from your phone's Health / Fit app or your watch, against a daily goal (default 10,000), with distance and a 7-day average and best. Automatic step counting isn't supported yet.
 - **⌚ Watch & heart rate** (More, or the link on the Workout tab): connects over Bluetooth to watches and chest straps that broadcast heart rate (Garmin "Broadcast heart rate", Polar, Coros, Amazfit / Mi Band "Heart rate sharing", most chest straps). It shows live bpm in a floating pill and on the Workout tab, reconnects if the watch drops out, and saves the day's average and max. Bluetooth works in **Chrome on Android, Windows and Mac only**; iPhone browsers don't support it. Watches don't share step counts with websites, which is why watch steps are typed in.
 - **Workout**: first pick the day: **💤 Rest day**, **🏋️ Strength** or **🔥 Hybrid (HYROX)**. You can pick it from the Today screen too.
   - **201 exercises**: Chest, Back, Shoulders, Biceps, Triceps, Forearms, Legs, Glutes, Calves, Core, Full Body (Olympic lifts, kettlebells), plus **HYROX** (all 8 stations + the 1 km runs), **Running** and **Conditioning**. Search covers all of them, and you can add your own.
@@ -21,12 +21,14 @@ A personal workout, diet, water, steps, supplement and gym-fee tracker, with fri
   - History and PRs per exercise (heaviest, estimated 1-rep max, most reps; or best time for hybrid).
   - **Hybrid days**: one tap adds a **full HYROX simulation** (8 × 1 km runs + SkiErg, Sled Push, Sled Pull, Burpee Broad Jumps, Row, Farmers Carry, Sandbag Lunges, Wall Balls, using Men's Open weights as a starting point). The session shows a running total of your work time. Times can be typed as `4:05`, or just `405` on the number pad.
   - **Rest days**: a recovery card showing how much protein and water you still need today.
-- **Rest timer**: starts after each logged set (default 90 s, change it in More), with −15 / +15 / Skip. It vibrates and beeps when rest is over; in the Android app you also get a notification with the screen off.
+  - **Your weekly split**: the app learns what you train on each weekday from the last 4 weeks. Today and the Workout tab show "Usually on Mondays: Bench press, Overhead press…" with one tap to load it, and a "Coming up" list shows the rest of the week.
+- **Rest timer**: starts after each logged set (default 90 s, change it in More), with −15 / +15 / Skip. It vibrates and beeps when rest is over.
 - **Workout plans** (📋 Plans on the Workout tab): templates (Push, Pull, Legs, Upper, Lower, Full body, HYROX simulation, Hybrid engine), or save today's workout as your own plan. Starting a plan adds all its exercises, each with your last time and today's goal.
 - **Progress tab**: body weight with a trend chart and change over 30 days, measurements (waist, chest, arms, thighs, hips, body fat); strength per exercise (estimated 1-rep max per session, or best time for hybrid); weekly volume (kg × reps); and protein, calories and steps for the last 14 days against your goals. Tap a chart for exact values, or open "Show numbers".
-- **Android app**: all-day steps from Health Connect (also with the app closed) and reminders that fire with the app closed. See [ANDROID.md](ANDROID.md).
-- **Supplements**: pick from **40 supplements** (protein, performance, vitamins & minerals, Ayurvedic like ashwagandha and shilajit, gut/joints/sleep), each with a typical dose and suggested time, or add your own. Then a daily checklist, a 7-day log, and a "Take your creatine" notification if a dose isn't ticked off. Doses are typical label amounts: follow the product label or a doctor.
-- **Gym membership**: fee expiry date, a reminder N days before it expires, and "Mark fees paid", which extends it by your plan length and records the payment.
+- **Account & backup** (More): sign up with email and your logs are backed up and synced, so you can use the app on another phone or on the website. Needs a one-time Firebase setup: see [FIREBASE.md](FIREBASE.md).
+- **Android app**: the same app as an APK. See [ANDROID.md](ANDROID.md).
+- **Supplements**: pick from **40 supplements** (protein, performance, vitamins & minerals, Ayurvedic like ashwagandha and shilajit, gut/joints/sleep), each with a typical dose and suggested time, or add your own. Whey, gainers and bars can carry their **brand, calories and protein** (pick from the brand list): ticking them off adds them to Diet. Then a daily checklist that shows what's due now, and a 7-day log. Doses are typical label amounts: follow the product label or a doctor.
+- **Gym membership**: fee expiry date, a "fees due" banner N days before it expires, and "Mark fees paid", which extends it by your plan length and records the payment.
 - **Phone-friendly**: +/− buttons for weight and reps (the weight button moves by the exercise's step), a vibration when a set is logged, the screen stays on while the Workout tab is open, the tab bar hides while the keyboard is up, and there's an install prompt on Android.
 - **App lock** 🔒 (optional, More → App lock): asks for your password when the app opens, or after 15 minutes in the background.
 
@@ -70,25 +72,21 @@ Then open http://localhost:5173.
 
 ## Put it on your phones
 
-Phones only allow installing and notifications on an **https** site. Upload this folder to any free static host:
-
-- **Netlify Drop**: go to https://app.netlify.com/drop and drag this folder in (a free account keeps the site up).
-- **GitHub Pages** or **Cloudflare Pages** work too.
+The public website is **https://jaibabbarfbd.github.io/gym-tracker/**, published by `.github/workflows/pages.yml` on every push to `main` (one-time setup: repo **Settings → Pages → Source: GitHub Actions**). Android users can also install the APK: see [ANDROID.md](ANDROID.md).
 
 Open the URL on each phone, then:
 - **Android (Chrome)**: menu ⋮ → *Add to Home screen* / *Install app*
-- **iPhone (Safari)**: Share → *Add to Home Screen*. iOS only allows notifications for home-screen apps.
+- **iPhone (Safari)**: Share → *Add to Home Screen*.
 
-Then open the app, enter your name, and tap **Enable** on the reminders banner. To connect with friends, tap the 🔥 chip at the top right.
+Then open the app and enter your name. To connect with friends, tap the 🔥 chip at the top right.
 
-## How reminders work
+## Reminders
 
-- **In-app notifications** (water, supplements, fees) fire while the app is open or running in the background. Browsers don't let a website schedule notifications once it's fully closed unless it has a push server.
-- For reminders that always fire, go to **More → Download calendar reminders**. This exports your water, supplement and fee reminders as a `.ics` file. Open it on your phone to add them to your calendar, and the calendar's alarms will go off even with the app closed. Export again if you change the times.
+Reminder notifications (water, supplements, gym fees, rest over) are switched off for now. The code is still there: set `REMINDERS = true` at the top of `js/app.js` to bring back the notifications, their settings and the calendar export.
 
 ## Your data
 
-Everything is saved in the browser on your phone (localStorage). Apart from the small friends status above, nothing is uploaded anywhere.
+Everything is saved in the browser on your phone (localStorage). If you sign in to an account, your logs are also backed up to it (see [FIREBASE.md](FIREBASE.md)). Online food search and barcode lookups go to Open Food Facts. Apart from that and the small friends status above, nothing is uploaded.
 
 - **More → Export backup** saves a `.json` file of your data.
 - **More → Restore backup** replaces the app's data with a backup, e.g. on a new phone. The backup keeps your friend code and friends list, so friends stay connected. A password-protected backup asks for its password.
@@ -102,10 +100,13 @@ Everything is saved in the browser on your phone (localStorage). Apart from the 
 index.html             app shell
 css/style.css          styles (always-dark theme)
 fonts/                 Manrope font, stored with the app so it works offline (SIL Open Font License, see fonts/OFL.txt)
-js/data.js             exercise, Indian food and supplement lists
-js/logic.js            pure logic: overload targets, streaks, reminders, dates, calendar export
+js/data.js             exercise, Indian food, packaged brand food and supplement lists
+js/logic.js            pure logic: overload targets, streaks, weekly split, reminders, dates, calendar export, cloud merge
 js/sync.js             friends: sharing streaks and workouts (relay)
-js/app.js              UI, storage, notifications
+js/scan.js             barcode scanning with the camera
+js/cloud.js            email accounts and cloud backup (Firebase, loaded on demand)
+js/firebase-config.js  your Firebase project settings (see FIREBASE.md)
+js/app.js              UI, storage, notifications, sync
 sw.js                  offline cache + notification taps
 manifest.webmanifest   install info
 icons/                 app icons

@@ -16,19 +16,22 @@
 <body>
 <main>
   <h1>Privacy</h1>
-  <p>Gym Tracker keeps your data on your phone. There are no accounts, no ads and no analytics.</p>
-
-  <h2>Health data (steps)</h2>
-  <p>With your permission, the Android app reads <b>today's step count</b> from Health Connect to show it on the Steps card and count toward your goal. It only reads steps, never writes anything to Health Connect, and the step numbers are stored only on your phone. You can remove the permission at any time in Health Connect settings.</p>
+  <p>Gym Tracker keeps your data on your phone, and in your account only if you create one. There are no ads and no analytics.</p>
 
   <h2>What stays on your phone</h2>
-  <p>Workouts, meals, water, steps, supplements, body measurements, gym fees and settings are saved only in the app's storage on your phone. Uninstalling the app or clearing its data deletes them, so export a backup from More → Backup now and then.</p>
+  <p>Workouts, meals, water, steps, supplements, body measurements, gym fees and settings are saved in the app's storage on your phone. Without an account, uninstalling the app or clearing its data deletes them, so export a backup from More → Backup now and then. The app lock password and notification settings never leave your phone.</p>
+
+  <h2>Account &amp; backup (optional)</h2>
+  <p>If you create an account with your email, your logs, goals and settings are also stored in Google Firebase (Cloud Firestore) under that account, so they are backed up and you can sign in on another phone or on the website. Only you, signed in, can read or change them. Your email and password are handled by Firebase Authentication. More → Account &amp; backup → Delete account permanently deletes the account and everything backed up in it.</p>
+
+  <h2>Food search and barcodes</h2>
+  <p>When you search foods online or scan a barcode, the search words or the barcode number are sent to <a href="https://world.openfoodfacts.org">Open Food Facts</a>, a free public food database, to look up the product. The camera is used only while the scanner is open, and the images stay on your phone. On phones without a built-in barcode reader, the scanner itself is downloaded from jsDelivr the first time you scan.</p>
 
   <h2>Friends</h2>
   <p>If you open Friends, the app shares a small status under your random friend code: your name, your streak (days in a row with a workout or rest day) and, only while “I lead workouts” is on, the list of exercises you added today. It goes through the free relay ntfy.sh and expires after 12 hours. Anyone who has your code can read it. Nothing else is shared. If you never open Friends, nothing is shared.</p>
 
   <h2>Notifications</h2>
-  <p>Reminders for water, supplements, gym fees and rest timers are scheduled on your phone. They don't involve any server.</p>
+  <p>The app doesn't send notifications or emails, apart from the account emails Firebase sends when you ask for them (confirming your email address, resetting your password).</p>
 </main>
 </body>
 </html>

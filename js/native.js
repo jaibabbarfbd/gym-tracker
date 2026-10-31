@@ -1,5 +1,4 @@
 /* Android app extras (Capacitor). In a browser none of this is active and the web versions are used.
-   - Steps: today's total from Health Connect, which keeps counting all day with the app closed.
    - Reminders: scheduled as Android notifications, so they fire with the app closed.
    - Files and text go out through the Android share sheet. */
 (function (root) {
@@ -9,50 +8,9 @@
   const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) && !isNative;
   const isIosPwa = isIos && (navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches);
   const plugin = (name) => (isNative ? (cap.Plugins && cap.Plugins[name]) || (cap.registerPlugin && cap.registerPlugin(name)) : null);
-  const Health = plugin('Health');
   const Notifs = plugin('LocalNotifications');
   const Share = plugin('Share');
   const Files = plugin('Filesystem');
-
-  // ---------- Steps (Health Connect) ----------
-  // 'granted' | 'not-granted' | 'unavailable' (Health Connect missing or outdated) | 'unsupported' (browser)
-  async function stepsAccess() {
-    if (!Health) return 'unsupported';
-    try {
-      const { available } = await Health.isAvailable();
-      if (!available) return 'unavailable';
-      const status = await Health.checkAuthorization({ read: ['steps'] });
-      return (status.readAuthorized || []).includes('steps') ? 'granted' : 'not-granted';
-    } catch (e) {
-      return 'unavailable';
-    }
-  }
-
-  async function requestSteps() {
-    if (!Health) return 'unsupported';
-    try {
-      const status = await Health.requestAuthorization({ read: ['steps'] });
-      return (status.readAuthorized || []).includes('steps') ? 'granted' : 'not-granted';
-    } catch (e) {
-      return 'unavailable';
-    }
-  }
-
-  // Today's steps from every source Health Connect knows (phone, Google Fit, Samsung Health, watches).
-  async function stepsToday() {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const { samples } = await Health.queryAggregated({
-      dataType: 'steps',
-      startDate: start.toISOString(),
-      endDate: new Date().toISOString(),
-      bucket: 'day',
-      aggregation: 'sum',
-    });
-    return Math.round((samples || []).reduce((sum, s) => sum + (s.value || 0), 0));
-  }
-
-  const openHealthSettings = () => Health && Health.openHealthConnectSettings();
 
   // ---------- Reminders ----------
   // Reminder ids live in this range; other notifications (the rest timer) are left alone.
@@ -103,5 +61,5 @@
   }
   const shareText = (text) => Share.share({ text });
 
-  root.GymNative = { isNative, isIos, isIosPwa, stepsAccess, requestSteps, stepsToday, openHealthSettings, notifPermission, setReminders, notifyAt, shareFile, shareText };
+  root.GymNative = { isNative, isIos, isIosPwa, notifPermission, setReminders, notifyAt, shareFile, shareText };
 })(window);

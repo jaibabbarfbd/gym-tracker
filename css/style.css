@@ -290,6 +290,7 @@ input[type="checkbox"] { width: 22px; min-height: 22px; height: 22px; padding: 0
 main > .btn.block { margin: 4px 0 14px; min-height: 52px; font-size: 16px; }
 .link { padding: 4px 0; border: 0; background: none; color: var(--accent-text); font-weight: 700; }
 .link.danger { color: #ff8a99; }
+.btn.danger { color: #ff8a99; border-color: rgba(255, 90, 110, .5); }
 .icon-btn {
   display: inline-grid;
   place-items: center;
@@ -610,6 +611,11 @@ main > .chips.scroll { margin-left: -16px; margin-right: -16px; padding: 0 16px 
 .day-types.big .small { font-size: 12px; line-height: 1.3; }
 .card .day-types { margin-bottom: 0; }
 .plan-q { margin: 4px 0 14px; color: var(--muted); text-align: center; }
+.usual { margin: 0 0 14px; padding: 14px; border-radius: 16px; background: var(--accent-soft); border: 1px solid rgba(200, 245, 60, .22); }
+.usual-ex { margin: 4px 0 12px; font-weight: 700; line-height: 1.35; }
+.usual-rest { margin: 0 0 12px; text-align: center; }
+.week-ahead .usual-day { width: 44px; flex: none; color: var(--muted); font-size: 13px; font-weight: 700; }
+.week-ahead .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rest-card { text-align: center; }
 .rest-card h2 { margin-bottom: 4px; }
 .tips { list-style: none; margin: 14px 0 0; padding: 0; text-align: left; }
@@ -672,6 +678,13 @@ main > .chips.scroll { margin-left: -16px; margin-right: -16px; padding: 0 16px 
 .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .sheet-head h2 { font-size: 19px; }
 .search { margin-bottom: 10px; }
+.food-tools { margin-bottom: 12px; }
+.pick.web-search { justify-content: center; color: var(--accent-text); }
+.block-link { display: block; margin: 14px auto 0; }
+.center { text-align: center; }
+.scan-box { position: relative; overflow: hidden; aspect-ratio: 4 / 3; margin-bottom: 10px; border-radius: 18px; background: #000; }
+.scan-box video { width: 100%; height: 100%; object-fit: cover; }
+.scan-frame { position: absolute; inset: 30% 12%; border: 2px solid var(--accent); border-radius: 12px; box-shadow: 0 0 0 999px rgba(0, 0, 0, .35); pointer-events: none; }
 .search-btn { margin: 0 0 4px; }
 .pick-list { list-style: none; max-height: 46vh; margin: 0 0 12px; padding: 0; overflow-y: auto; }
 .pick-head {

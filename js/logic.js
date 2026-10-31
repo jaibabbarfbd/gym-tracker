@@ -102,6 +102,36 @@
     return [...map.values()].sort((a, b) => b.count - a.count).slice(0, limit);
   }
 
+  // An Open Food Facts product as a food to log: per serving when the label gives a serving size,
+  // otherwise per 100 g (or 100 ml). cal / protein are null when the database doesn't have them,
+  // so the person can copy them from the pack. Returns null for products without a name.
+  function offFood(prod) {
+    const name = (prod?.product_name || '').trim().slice(0, 60);
+    if (!name) return null;
+    const n = prod.nutriments || {};
+    const grams = prod.serving_size && +prod.serving_quantity > 0 ? +prod.serving_quantity : 0;
+    const val = (key) => {
+      if (grams && n[`${key}_serving`] != null) return +n[`${key}_serving`];
+      if (n[`${key}_100g`] != null) return (+n[`${key}_100g`] * (grams || 100)) / 100;
+      return null;
+    };
+    let cal = val('energy-kcal');
+    if (cal == null) {
+      const kj = val('energy-kj') ?? val('energy'); // OFF's plain "energy" is in kJ
+      if (kj != null) cal = kj / 4.184;
+    }
+    const protein = val('proteins');
+    const ok = (v) => v != null && isFinite(v) && v >= 0;
+    return {
+      name,
+      brand: (prod.brands || '').split(',')[0].trim().slice(0, 40),
+      serving: grams ? String(prod.serving_size).trim().slice(0, 30) : /\bml\b/i.test(prod.quantity || '') ? '100 ml' : '100 g',
+      cal: ok(cal) ? Math.round(cal) : null,
+      protein: ok(protein) ? round2(protein) : null,
+      code: String(prod.code || ''),
+    };
+  }
+
   // ---------- Training ----------
   function exerciseCfg(ex, override) {
     const o = override || {};
@@ -277,6 +307,23 @@
     return { change: round2(latest.y - before.y), from: before.x };
   }
 
+  // ---------- Weekly split ----------
+  // What you train on each weekday, learned from the last `weeks` weeks: for every weekday, the most
+  // recent session on that weekday (exercises in the order you did them) or a rest day you marked.
+  // Days you skipped are passed over, so one missed Monday doesn't wipe out "Monday = Push".
+  function weeklySplit(workouts, days, today, weeks = 4) {
+    const split = {};
+    for (let i = 1; i <= weeks * 7; i++) {
+      const date = addDays(today, -i);
+      const wd = parseYmd(date).getDay();
+      if (split[wd]) continue;
+      const done = workouts.filter((w) => w.date === date && w.sets.length).sort((a, b) => a.ts - b.ts);
+      if (done.length) split[wd] = { date, type: days[date] && days[date] !== 'rest' ? days[date] : null, ex: [...new Set(done.map((w) => w.exId))] };
+      else if (days[date] === 'rest') split[wd] = { date, type: 'rest', ex: [] };
+    }
+    return split;
+  }
+
   // ---------- Streaks ----------
   // A day counts when a workout set was logged or the day was marked as a rest day.
   // The streak runs back from today, or from yesterday so it isn't lost before today's session.
@@ -297,48 +344,11 @@
   const streakNow = (status, today) => (status?.last && daysBetween(status.last, today) <= 1 ? status.streak || 0 : 0);
 
   // ---------- Steps & heart rate ----------
-  // Step detector for accelerometer samples (m/s², ms). Steps are peaks in the
-  // movement around gravity. They only count once a rhythm of `warmup` steps
-  // 0.25–2 s apart shows up, so a single shake or bump adds nothing.
-  function createStepDetector({ threshold = 1.1, minGap = 250, maxGap = 2000, warmup = 4 } = {}) {
-    let gravity = null;
-    let wave = 0;
-    let armed = true;
-    let lastStep = 0;
-    let pending = 0;
-    let walking = false;
-    return function push(x, y, z, t) {
-      const mag = Math.sqrt(x * x + y * y + z * z);
-      gravity = gravity == null ? mag : gravity * 0.98 + mag * 0.02;
-      wave = wave * 0.6 + (mag - gravity) * 0.4;
-      if (!armed) {
-        if (wave < threshold * 0.4) armed = true;
-        return 0;
-      }
-      if (wave < threshold) return 0;
-      armed = false;
-      const gap = t - lastStep;
-      if (lastStep && gap < minGap) return 0;
-      lastStep = t;
-      if (gap > maxGap) { // first step, or walking again after a pause
-        walking = false;
-        pending = 1;
-        return 0;
-      }
-      if (walking) return 1;
-      if (++pending < warmup) return 0;
-      walking = true;
-      const n = pending;
-      pending = 0;
-      return n;
-    };
-  }
-
   // Bluetooth Heart Rate Measurement (0x2A37): a flags byte, then bpm as uint8 or uint16.
   const parseHeartRate = (view) => (view.getUint8(0) & 1 ? view.getUint16(1, true) : view.getUint8(1));
 
-  // Every source (phone motion, watch typed in, Health Connect, live while open) counts the same
-  // steps, so the day's total is whichever is highest, never the sum.
+  // Steps are typed in now; older entries may also hold phone / Health Connect counts of the
+  // same steps, so the day's total is whichever is highest, never the sum.
   const stepsTotal = (rec) => Math.max(rec?.phone || 0, rec?.manual || 0, rec?.health || 0, rec?.live || 0);
 
   // ---------- Reminders ----------
@@ -583,17 +593,109 @@
     return { ics: out.map(icsFold).join('\r\n') + '\r\n', count };
   }
 
+  // ---------- Cloud sync ----------
+  // An account stores the profile in chunks: 'core' (settings, stack, plans, products…) and one per
+  // month ('m2026-10') with that month's logs, so no cloud document grows without limit.
+  const LOCAL_ONLY = ['pass', 'notified', 'pub']; // app lock and notification bookkeeping stay on each phone
+  const MONTH_LISTS = ['meals', 'water', 'workouts', 'suppLog', 'body'];
+  const MONTH_MAPS = ['days', 'steps', 'hr'];
+  const monthChunk = (date) => `m${String(date || '0000-00').slice(0, 7)}`;
+
+  function splitChunks(p) {
+    const core = {};
+    for (const [k, v] of Object.entries(p)) {
+      if (!LOCAL_ONLY.includes(k) && !MONTH_LISTS.includes(k) && !MONTH_MAPS.includes(k)) core[k] = v;
+    }
+    const chunks = { core };
+    const at = (date) => (chunks[monthChunk(date)] = chunks[monthChunk(date)] || {});
+    for (const k of MONTH_LISTS) for (const item of p[k] || []) (at(item.date)[k] = at(item.date)[k] || []).push(item);
+    for (const k of MONTH_MAPS) for (const [date, v] of Object.entries(p[k] || {})) (at(date)[k] = at(date)[k] || {})[date] = v;
+    return chunks;
+  }
+
+  // The synced part of a profile, back from chunks. Device-only fields are left to the caller.
+  function joinChunks(chunks) {
+    const p = { ...chunks.core };
+    for (const k of MONTH_LISTS) p[k] = [];
+    for (const k of MONTH_MAPS) p[k] = {};
+    for (const name of Object.keys(chunks).sort()) {
+      if (name === 'core') continue;
+      for (const k of MONTH_LISTS) if (chunks[name][k]) p[k].push(...chunks[name][k]);
+      for (const k of MONTH_MAPS) if (chunks[name][k]) Object.assign(p[k], chunks[name][k]);
+    }
+    return p;
+  }
+
+  const isPlainObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const isRecordList = (v) => Array.isArray(v) && v.every((x) => isPlainObj(x) && typeof x.id === 'string');
+
+  // Same content gives the same hash whatever the key order (FNV-1a, 32 bit).
+  function stableJson(v) {
+    if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`;
+    if (isPlainObj(v)) return `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}`;
+    return v === undefined ? 'null' : JSON.stringify(v);
+  }
+  function hashOf(v) {
+    const s = stableJson(v);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+    return (h >>> 0).toString(16).padStart(8, '0');
+  }
+
+  // What both sides last agreed on, kept small: hashes per record (by id) and per object key.
+  function syncBase(v) {
+    if (isRecordList(v)) return { h: hashOf(v), r: Object.fromEntries(v.map((x) => [x.id, hashOf(x)])) };
+    if (isPlainObj(v)) return { h: hashOf(v), o: Object.fromEntries(Object.keys(v).filter((k) => v[k] !== undefined).map((k) => [k, syncBase(v[k])])) };
+    return { h: hashOf(v) };
+  }
+
+  // Three-way merge of this phone's data with the cloud's, against `base` (undefined on a first sync).
+  // Records are matched by id and object keys one by one, so edits made on two phones combine.
+  // An edit beats a delete. If both sides changed the same thing, this phone wins, except on a
+  // first sync, when the cloud wins (a new phone's default settings mustn't replace your real ones).
+  // Returns undefined when the value was deleted.
+  function merge3(local, cloud, base, localWins = false) {
+    const same = (v, b) => !!b && hashOf(v) === b.h;
+    if (cloud === undefined) return local === undefined || same(local, base) ? undefined : local;
+    if (local === undefined) return same(cloud, base) ? undefined : cloud;
+    if (hashOf(local) === hashOf(cloud) || same(cloud, base)) return local;
+    if (same(local, base)) return cloud;
+    // Both sides changed it: combine the parts.
+    const wins = localWins || !!base;
+    if (isRecordList(local) && isRecordList(cloud)) {
+      const mine = new Map(local.map((x) => [x.id, x]));
+      const theirs = new Map(cloud.map((x) => [x.id, x]));
+      const out = [];
+      for (const id of new Set([...mine.keys(), ...theirs.keys()])) {
+        const b = base?.r?.[id];
+        const m = merge3(mine.get(id), theirs.get(id), b === undefined ? undefined : { h: b }, wins);
+        if (m !== undefined) out.push(m);
+      }
+      return out;
+    }
+    if (isPlainObj(local) && isPlainObj(cloud)) {
+      const out = {};
+      for (const k of new Set([...Object.keys(local), ...Object.keys(cloud)])) {
+        const m = merge3(local[k], cloud[k], base?.o?.[k], wins);
+        if (m !== undefined) out[k] = m;
+      }
+      return out;
+    }
+    return wins ? local : cloud;
+  }
+
   const api = {
     ...DATA, DAY_TYPES,
     ymd, parseYmd, addDays, addMonths, daysBetween, hmToMin, atTime, fmtDate, relDay, fmtClock, fmt12, fmtW, fmtL, fmtDur, parseDur, round2,
-    dayTotals, savedFoods,
+    dayTotals, savedFoods, offFood,
     exerciseCfg, isForTime, lastSession, overloadTargets, bestSet, bestTimed, repsAtWeight, e1rm, personalBests, compareSet,
-    createStepDetector, parseHeartRate, stepsTotal, nativeReminders,
+    parseHeartRate, stepsTotal, nativeReminders,
     waterReminder, suppSlots, findTaken, membershipStatus, buildICS,
     sha256Hex, makePassword, checkPassword,
     newSyncCode, normalizeSyncCode, syncTopic, workoutPayload, parseWorkoutPayload, statusPayload, parseStatus,
-    streakInfo, streakNow,
+    streakInfo, streakNow, weeklySplit,
     liftSeries, weekStart, weeklyVolume, dailySeries, bodySeries, bodyChange,
+    LOCAL_ONLY, splitChunks, joinChunks, hashOf, syncBase, merge3,
   };
   root.GymLogic = api;
   if (typeof module !== 'undefined') module.exports = api;

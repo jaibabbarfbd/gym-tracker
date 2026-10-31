@@ -1,0 +1,47 @@
+# Publishes the website (the www/ folder) to GitHub Pages on every push to main:
+#   https://jaibabbarfbd.github.io/gym-tracker/
+# iPhone users open this link in Safari and use Share → Add to Home Screen.
+# One-time setup: repo Settings → Pages → Build and deployment → Source: "GitHub Actions".
+name: Website
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history: the build number is the commit count
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # Build number = commit count, the same number the APK gets, so the app's "update available" check lines up.
+      - name: Build the website
+        run: BUILD_NUMBER=$(git rev-list --count HEAD) node scripts/build-web.js
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: www
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
