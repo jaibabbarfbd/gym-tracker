@@ -61,5 +61,12 @@
   }
   const shareText = (text) => Share.share({ text });
 
-  root.GymNative = { isNative, isIos, isIosPwa, notifPermission, setReminders, notifyAt, shareFile, shareText };
+  // Status bar icons to match the app's theme: dark icons on the light theme, light icons on dark.
+  const Bars = plugin('SystemBars');
+  function setBarStyle(light) {
+    if (!Bars) return;
+    try { Promise.resolve(Bars.setStyle({ style: light ? 'LIGHT' : 'DARK' })).catch(() => {}); } catch (e) { /* older app shell */ }
+  }
+
+  root.GymNative = { isNative, isIos, isIosPwa, notifPermission, setReminders, notifyAt, shareFile, shareText, setBarStyle };
 })(window);

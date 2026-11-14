@@ -1,4 +1,4 @@
-/* Gym Tracker: One UI–style look. Follows the phone's light / dark setting. */
+/* Gym Tracker: One UI-style look. Dark by default; light (or follow the phone) is chosen in Settings and set as data-theme on <html>. */
 
 @font-face {
   font-family: 'Manrope';
@@ -19,7 +19,7 @@
 
 /* ---------- Tokens: dark (default) ---------- */
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   --bg: #07080a;
   --surface: #131519;
   --surface-2: #1a1d23;
@@ -72,47 +72,46 @@
 }
 
 /* ---------- Tokens: light ---------- */
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f2f3f5;
-    --surface: #ffffff;
-    --surface-2: #f6f7f8;
-    --surface-3: #eceef1;
-    --sheet-bg: #f7f8f9;
-    --bar-bg: rgba(242, 243, 245, .82);
-    --dock-bg: rgba(255, 255, 255, .86);
-    --toast-bg: rgba(40, 44, 52, .94);
-    --scrim: rgba(10, 14, 20, .32);
-    --seg-thumb: #ffffff;
-    --fill-1: rgba(15, 20, 30, .035);
-    --fill-2: rgba(15, 20, 30, .06);
-    --fill-3: rgba(15, 20, 30, .11);
-    --border: rgba(15, 20, 30, .06);
-    --border-strong: rgba(15, 20, 30, .1);
-    --text: #14171c;
-    --text-2: #3b414b;
-    --muted: #666c77;
-    --placeholder: #9aa0a9;
-    --accent-hi: #d4fa55;
-    --accent-lo: #b4e622;
-    --accent-text: #3f6d00;
-    --accent-soft: rgba(140, 195, 0, .15);
-    --accent-line: rgba(100, 150, 0, .32);
-    --accent-glow: rgba(150, 205, 0, .4);
-    --brand-a: #14171c;
-    --brand-b: #3f6d00;
-    --glow-1: rgba(180, 230, 30, .16);
-    --glow-2: rgba(124, 96, 255, .08);
-    --glow-3: rgba(57, 135, 229, .06);
-    --cal: #bb7c00;
-    --good: #08805a;
-    --warn: #a86500;
-    --danger: #d92d43;
-    --danger-text: #c8243a;
-    --streak-text: #c2561a;
-    --shadow: 0 1px 2px rgba(15, 20, 30, .04), 0 8px 24px -12px rgba(15, 20, 30, .12);
-    --shadow-float: 0 14px 34px -12px rgba(15, 20, 30, .22);
-  }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f2f3f5;
+  --surface: #ffffff;
+  --surface-2: #f6f7f8;
+  --surface-3: #eceef1;
+  --sheet-bg: #f7f8f9;
+  --bar-bg: rgba(242, 243, 245, .82);
+  --dock-bg: rgba(255, 255, 255, .86);
+  --toast-bg: rgba(40, 44, 52, .94);
+  --scrim: rgba(10, 14, 20, .32);
+  --seg-thumb: #ffffff;
+  --fill-1: rgba(15, 20, 30, .035);
+  --fill-2: rgba(15, 20, 30, .06);
+  --fill-3: rgba(15, 20, 30, .11);
+  --border: rgba(15, 20, 30, .06);
+  --border-strong: rgba(15, 20, 30, .1);
+  --text: #14171c;
+  --text-2: #3b414b;
+  --muted: #666c77;
+  --placeholder: #9aa0a9;
+  --accent-hi: #d4fa55;
+  --accent-lo: #b4e622;
+  --accent-text: #3f6d00;
+  --accent-soft: rgba(140, 195, 0, .15);
+  --accent-line: rgba(100, 150, 0, .32);
+  --accent-glow: rgba(150, 205, 0, .4);
+  --brand-a: #14171c;
+  --brand-b: #3f6d00;
+  --glow-1: rgba(180, 230, 30, .16);
+  --glow-2: rgba(124, 96, 255, .08);
+  --glow-3: rgba(57, 135, 229, .06);
+  --cal: #bb7c00;
+  --good: #08805a;
+  --warn: #a86500;
+  --danger: #d92d43;
+  --danger-text: #c8243a;
+  --streak-text: #c2561a;
+  --shadow: 0 1px 2px rgba(15, 20, 30, .04), 0 8px 24px -12px rgba(15, 20, 30, .12);
+  --shadow-float: 0 14px 34px -12px rgba(15, 20, 30, .22);
 }
 
 * { box-sizing: border-box; }
@@ -346,7 +345,7 @@ main { max-width: 560px; margin: 0 auto; padding: 8px 16px 18px; }
   background: var(--surface);
   box-shadow: var(--shadow);
 }
-@media (prefers-color-scheme: light) { .card { border-color: transparent; } }
+:root[data-theme="light"] .card { border-color: transparent; }
 .card > h2 { margin-bottom: 14px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
 .card.empty { padding: 32px 22px; text-align: center; }
@@ -472,6 +471,7 @@ main > .btn.block { margin: 4px 0 14px; min-height: 54px; font-size: 16px; }
   scrollbar-width: none;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
+  scroll-padding-inline: 20px;
 }
 .chips.scroll::-webkit-scrollbar { display: none; }
 .chips.scroll .chip { flex: none; scroll-snap-align: start; }
@@ -896,6 +896,8 @@ main > .chips.scroll { margin-left: -16px; margin-right: -16px; padding: 0 16px 
 .pick.has-history > span:last-child { color: var(--accent-text); }
 .custom-ex { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .food-total { margin: 18px 0; font-size: 20px; text-align: center; }
+.per-piece { margin: 0 0 4px; font-size: 16px; color: var(--text-2); }
+.per-piece b { color: var(--text); }
 
 .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
 .tile { padding: 14px 12px; border-radius: 20px; background: var(--fill-1); }

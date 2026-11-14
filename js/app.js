@@ -199,6 +199,24 @@
     </div>`;
   }
 
+  // ---------- Theme (Settings → Theme) ----------
+  // Saved per phone, outside the synced data, so index.html can apply it before the first paint.
+  const THEME_KEY = 'gymtracker.theme';
+  const lightQuery = matchMedia('(prefers-color-scheme: light)');
+  function themePref() {
+    if (ui.theme) return ui.theme;
+    try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch (e) { return 'dark'; }
+  }
+  function applyTheme() {
+    const t = themePref();
+    const light = t === 'light' || (t === 'system' && lightQuery.matches);
+    document.documentElement.dataset.theme = light ? 'light' : 'dark';
+    $('meta[name="theme-color"]')?.setAttribute('content', light ? '#f2f3f5' : '#07080a');
+    GymNative.setBarStyle(light);
+  }
+  lightQuery.addEventListener?.('change', applyTheme);
+  applyTheme();
+
   // ---------- Update banner ----------
   // Build number baked in at CI time via version.json inside the bundle.
   // 0 means a local / dev build — no update checks.
@@ -206,13 +224,16 @@
   let _latestBuild = 0;
   let _updateDismissed = false;
 
+  let _updateReady = false; // website: a newer version is downloaded and needs a refresh
   async function checkForUpdate() {
     try {
-      // Our own build number — served from the same origin as the app bundle.
-      const selfRes = await fetch('./version.json?t=' + Date.now(), { cache: 'no-store' });
-      if (!selfRes.ok) return;
-      const self = await selfRes.json();
-      _myBuild = self.build || 0;
+      // Our own build number: read once, when this copy of the app started. (On the website it's the
+      // same file as the latest one, so re-reading it later would always match and hide updates.)
+      if (!_myBuild) {
+        const selfRes = await fetch('./version.json?t=' + Date.now(), { cache: 'no-store' });
+        if (!selfRes.ok) return;
+        _myBuild = (await selfRes.json()).build || 0;
+      }
       if (!_myBuild) return; // local / dev build, skip
 
       // Latest published build — always served from GitHub Pages (main branch).
@@ -229,11 +250,15 @@
   }
 
   function updateBanner() {
-    if (_updateDismissed || _latestBuild <= _myBuild) return '';
-    if (GymNative.isIos) {
+    if (_updateDismissed || (_latestBuild <= _myBuild && !_updateReady)) return '';
+    // Website / installed web app: refreshing loads the new version.
+    if (!GymNative.isNative) {
       return `<div class="banner info" id="update-banner">
-        <span>🆕 Update available — refresh to get it</span>
-        <button class="icon-btn small" data-action="dismiss-update" aria-label="Dismiss">✕</button>
+        <span>🆕 A new version is ready</span>
+        <div class="row nowrap">
+          <button class="btn small primary" data-action="update-reload">Refresh</button>
+          <button class="icon-btn small" data-action="dismiss-update" aria-label="Dismiss">✕</button>
+        </div>
       </div>`;
     }
     const apkUrl = 'https://github.com/jaibabbarfbd/gym-tracker/releases/latest/download/gym-tracker.apk';
@@ -1083,8 +1108,14 @@
     }[ms.state];
     const others = db.profiles.filter((x) => x.id !== p.id);
 
+    const theme = themePref();
     return `<h1 class="page-title">Settings</h1>
       ${accountCard()}
+      <section class="card">
+        <h2>Theme</h2>
+        <div class="seg" role="group" aria-label="Theme">${[['dark', '🌙 Dark'], ['light', '☀️ Light'], ['system', '📱 Phone']].map(([t, label]) => `<button class="seg-btn ${t === theme ? 'active' : ''}" data-action="theme" data-t="${t}" aria-pressed="${t === theme}">${label}</button>`).join('')}</div>
+        <p class="muted small">${theme === 'system' ? 'Follows your phone\'s light / dark setting.' : 'Phone = follow your phone\'s light / dark setting.'}</p>
+      </section>
       <section class="card">
         <div class="card-head"><h2>Friends</h2><span class="streak ${myStreak(p).count ? 'on' : ''}">${streakText(myStreak(p).count)}</span></div>
         <p class="muted small">${p.friends.length ? `${plural(p.friends.length, 'friend')}${p.lead ? ' · 👑 you lead workouts' : ''}${followed(p) ? ` · syncing ${esc(followed(p).name)}'s workout` : ''}` : 'Add friends to see each other\'s streaks and sync workouts.'}</p>
@@ -1303,9 +1334,12 @@
 
   function foodRow(f, src, i) {
     const missing = f.cal == null || f.protein == null;
+    // Countable foods show calories per piece ("54 kcal / biscuit"); the rest per serving.
+    const pc = !missing && L.pieceInfo(f.serving);
+    const each = pc && pc.count > 1;
     return `<li><button class="pick" data-action="food-pick" data-src="${src}" data-i="${i}">
-        <span>${esc(foodName(f))}<span class="muted small block">${esc(f.serving)}</span></span>
-        <span class="muted small nowrap">${missing ? 'Add from label' : `${f.cal} kcal · ${f.protein} g`}</span>
+        <span>${esc(foodName(f))}<span class="muted small block">${each ? `1 ${esc(pc.one)}${pc.size ? ` (${pc.size} ${pc.unit})` : ''}` : esc(f.serving)}</span></span>
+        <span class="muted small nowrap">${missing ? 'Add from label' : each ? `${Math.round(f.cal / pc.count)} kcal · ${L.round2(f.protein / pc.count)} g` : `${f.cal} kcal · ${f.protein} g`}</span>
       </button></li>`;
   }
 
@@ -1366,8 +1400,10 @@
       const step = piece ? 1 : qtyStep(f);
       const units = piece ? pc.many : 'servings';
       return `${head(esc(foodName(f)))}
-        <p class="muted">1 serving = ${esc(f.serving)} · ${f.cal} kcal · ${f.protein} g protein</p>
-        ${pc && pc.count > 1 ? `<p class="muted small">1 ${esc(pc.one)} = ${L.round2(f.cal / pc.count)} kcal · ${L.round2(f.protein / pc.count)} g protein</p>` : ''}
+        ${pc && pc.count > 1
+          ? `<p class="per-piece">1 ${esc(pc.one)}${pc.size ? ` (${pc.size} ${pc.unit})` : ''} = <b>${L.round2(f.cal / pc.count)} kcal</b> · <b>${L.round2(f.protein / pc.count)} g</b> protein</p>
+            <p class="muted small">Pack serving: ${esc(f.serving)} = ${f.cal} kcal</p>`
+          : `<p class="muted">1 serving = ${esc(f.serving)} · ${f.cal} kcal · ${f.protein} g protein</p>`}
         ${f.src === 'web' ? `<p class="muted small">From ${esc(f.source || 'Open Food Facts')}. It's saved to ⭐ Mine when you add it.</p>` : ''}
         ${pc && pc.count > 1 ? `<div class="seg" role="group" aria-label="Count by">${[['piece', capFirst(pc.many)], ['serving', 'Servings']].map(([u, label]) => `<button class="seg-btn ${u === ui.foodUnit ? 'active' : ''}" data-action="food-unit" data-u="${u}" aria-pressed="${u === ui.foodUnit}">${esc(label)}</button>`).join('')}</div>` : ''}
         <div class="field">
@@ -1496,7 +1532,7 @@
     ui.foodPick = f;
     ui.foodPieces = L.pieceInfo(f.serving);
     ui.foodUnit = ui.foodPieces ? 'piece' : 'serving';
-    ui.foodQty = ui.foodPieces ? ui.foodPieces.count : 1; // one serving's worth to start
+    ui.foodQty = 1; // 1 biscuit (or 1 serving) to start; + adds one at a time
     ui.foodView = 'pick';
     openSheet(foodSheet());
   }
@@ -3090,6 +3126,15 @@
       _updateDismissed = true;
       render();
     },
+    'update-reload'() {
+      location.reload();
+    },
+    theme(el) {
+      try { localStorage.setItem(THEME_KEY, el.dataset.t); } catch (e) { /* storage blocked: applies until the app closes */ }
+      ui.theme = el.dataset.t;
+      applyTheme();
+      render();
+    },
     'enable-notifs'() {
       enableNotifs();
     },
@@ -3502,5 +3547,22 @@
   // The app ships its files inside the APK, so only the website needs the offline cache.
   if (!GymNative.isNative && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
+    // A new version's service worker took over: load it now if you're not in the middle of
+    // something, otherwise show the Refresh banner. (Skipped on first install: nothing to replace.)
+    let hadWorker = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadWorker) { hadWorker = true; return; }
+      if (!isTyping() && !isSheetOpen()) return location.reload();
+      _updateReady = true;
+      if (!isTyping()) render();
+    });
+    // An installed app is often resumed rather than reopened, so look for updates when it comes back.
+    let lastCheck = Date.now();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden || Date.now() - lastCheck < 60000) return;
+      lastCheck = Date.now();
+      navigator.serviceWorker.getRegistration().then((reg) => reg?.update()).catch(() => {});
+      checkForUpdate();
+    });
   }
 })();
