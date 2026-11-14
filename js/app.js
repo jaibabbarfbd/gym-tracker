@@ -97,8 +97,8 @@
   if (db.profiles.length && !db.profiles.some((p) => p.id === db.activeId)) db.activeId = db.profiles[0].id;
   const ui = {
     tab: 'today', date: L.ymd(), openEx: null, pickGroup: 'All', mealType: null, foods: [],
-    foodCat: 'All', foodPick: null, foodQty: 1,
-    foodGroup: 'indian', foodView: 'list', foodQuery: '', web: null, productDraft: null, productNote: '', // food sheet
+    foodCat: 'All', foodPick: null, foodQty: 1, foodPieces: null, foodUnit: 'serving',
+    foodGroup: 'indian', foodView: 'list', foodQuery: '', foodNote: '', web: null, productDraft: null, productNote: '', // food sheet
     unlocked: new Set(), hiddenAt: 0,
     friendsAt: 0, friendsBusy: false, // last time friends' statuses were fetched
     progressEx: null, progressDaily: 'protein', // Progress tab choices
@@ -522,7 +522,7 @@
     swap('#lead-line', leadLine(p));
     const chip = $('#profile-chip');
     if (chip) chip.innerHTML = chipHtml(p);
-    if (!$('#sheet').hidden && $('#sheet .friend-hero')) $('#sheet').firstElementChild.innerHTML = friendsSheet(p);
+    if (isSheetOpen() && $('#sheet .friend-hero')) $('#sheet').firstElementChild.innerHTML = friendsSheet(p);
   }
 
   const chipHtml = (p) => {
@@ -1161,9 +1161,9 @@
       ${REMINDERS ? `<section class="card">
         <h2>Reminders</h2>
         ${notifSection()}
-        ${GymNative.isIos ? `<div class="card sub-card" style="margin-top:1rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:0.85rem;">
-          <h3 style="margin:0 0 0.3rem;font-size:0.95rem;">📱 iPhone Tips</h3>
-          <ul class="muted small" style="margin:0;padding-left:1.2em;line-height:1.7">
+        ${GymNative.isIos ? `<div class="sub-card">
+          <h3>📱 iPhone Tips</h3>
+          <ul class="muted small">
             <li><b>Steps:</b> Open Apple Health, check steps, then tap "Enter from watch".</li>
             <li><b>Notifications:</b> Work when the app is installed to your Home Screen.</li>
             <li><b>Heart rate:</b> Bluetooth watch sync is not supported in iOS browsers.</li>
@@ -1179,9 +1179,9 @@
           </div>
           <button class="btn primary">Save</button>
         </form>
-        <div class="card sub-card" style="margin-top:1.2rem;background:linear-gradient(135deg,rgba(200,245,60,0.08),rgba(200,245,60,0.02));border:1px solid rgba(200,245,60,0.25);border-radius:12px;padding:1rem;">
-          <h3 style="margin:0 0 0.35rem;font-size:0.95rem;">⏰ Guaranteed Lockscreen Alarms</h3>
-          <p class="muted small" style="margin:0 0 0.75rem;line-height:1.5;">Browser PWAs pause background timers when closed or locked. Tap below to sync your water and supplement schedule directly to your phone's <b>Calendar app</b> (Apple Calendar / Google Calendar) — alarms will ring with sound even with your phone locked or the app completely closed!</p>
+        <div class="sub-card accent">
+          <h3>⏰ Guaranteed Lockscreen Alarms</h3>
+          <p class="muted small">Browser PWAs pause background timers when closed or locked. Tap below to sync your water and supplement schedule directly to your phone's <b>Calendar app</b> (Apple Calendar / Google Calendar) — alarms will ring with sound even with your phone locked or the app completely closed!</p>
           <button class="btn primary block" data-action="ics">📲 Sync Alarms to Phone Calendar</button>
         </div>
       </section>` : ''}
@@ -1333,16 +1333,27 @@
   function webResultsHtml(q) {
     const w = ui.web;
     if (q.length < 2) return '';
-    if (!w || w.q !== q) return `<li><button class="pick web-search" data-action="food-web"><span>🌐 Search every brand online for “${esc(q)}”</span></button></li>`;
-    if (w.status === 'loading') return '<li class="muted pad">🌐 Searching Open Food Facts…</li>';
+    if (!w || w.q !== q) {
+      return q.length >= WEB_MIN && navigator.onLine !== false ? '<li class="muted pad">🌐 Searching every brand online…</li>'
+        : `<li><button class="pick web-search" data-action="food-web"><span>🌐 Search every brand online for “${esc(q)}”</span></button></li>`;
+    }
+    if (w.status === 'loading') return '<li class="muted pad">🌐 Searching every brand online…</li>';
     if (w.status === 'error') return '<li class="muted pad">Couldn\'t search online right now (no internet, or the food database is busy). <button class="link" data-action="food-web">Try again</button></li>';
     if (!w.items.length) return '<li class="muted pad">Nothing found online either. Tap <b>＋ Add a product</b> and copy it from the label.</li>';
     return `<li class="pick-head">Online · Open Food Facts</li>${w.items.map((f, i) => foodRow(f, 'web', i)).join('')}`;
   }
+  // Online search starts by itself once the search has this many letters and you pause typing.
+  const WEB_MIN = 3;
+  let webTimer = null;
 
   // Per-100 g foods step by 10 g; everything else by half servings.
   const qtyStep = (f) => (/^100 (g|ml)$/.test(f.serving) ? 0.1 : 0.5);
   const foodTotal = (f, qty) => `<b>${Math.round(f.cal * qty)} kcal</b> · <b>${L.round2(f.protein * qty)} g</b> protein`;
+  // Foods whose serving is a count ("3 biscuits (34 g)") can be logged by the piece.
+  const byPiece = () => ui.foodUnit === 'piece' && !!ui.foodPieces;
+  const foodServings = () => (byPiece() ? ui.foodQty / ui.foodPieces.count : ui.foodQty);
+  const pieceText = (n, pc) => `${n} ${n === 1 ? pc.one : pc.many}${pc.size ? ` (${L.round2(n * pc.size)} ${pc.unit})` : ''}`;
+  const capFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
   function foodSheet() {
     const close = '<button class="icon-btn" data-action="close-sheet" aria-label="Close">✕</button>';
@@ -1350,19 +1361,24 @@
     if (ui.foodView === 'pick') {
       const f = ui.foodPick;
       const type = ui.mealType || defaultMealType();
-      const step = qtyStep(f);
+      const pc = ui.foodPieces;
+      const piece = byPiece();
+      const step = piece ? 1 : qtyStep(f);
+      const units = piece ? pc.many : 'servings';
       return `${head(esc(foodName(f)))}
         <p class="muted">1 serving = ${esc(f.serving)} · ${f.cal} kcal · ${f.protein} g protein</p>
-        ${f.src === 'web' ? '<p class="muted small">From Open Food Facts. It\'s saved to ⭐ Mine when you add it.</p>' : ''}
+        ${pc && pc.count > 1 ? `<p class="muted small">1 ${esc(pc.one)} = ${L.round2(f.cal / pc.count)} kcal · ${L.round2(f.protein / pc.count)} g protein</p>` : ''}
+        ${f.src === 'web' ? `<p class="muted small">From ${esc(f.source || 'Open Food Facts')}. It's saved to ⭐ Mine when you add it.</p>` : ''}
+        ${pc && pc.count > 1 ? `<div class="seg" role="group" aria-label="Count by">${[['piece', capFirst(pc.many)], ['serving', 'Servings']].map(([u, label]) => `<button class="seg-btn ${u === ui.foodUnit ? 'active' : ''}" data-action="food-unit" data-u="${u}" aria-pressed="${u === ui.foodUnit}">${esc(label)}</button>`).join('')}</div>` : ''}
         <div class="field">
-          <span class="field-label">Servings</span>
+          <span class="field-label">How many ${esc(units)}</span>
           <div class="stepper qty">
-            <button type="button" data-action="food-qty" data-d="${-step}" aria-label="Fewer servings">−</button>
+            <button type="button" data-action="food-qty" data-d="${-step}" aria-label="Fewer ${esc(units)}">−</button>
             <output id="food-qty">${ui.foodQty}</output>
-            <button type="button" data-action="food-qty" data-d="${step}" aria-label="More servings">+</button>
+            <button type="button" data-action="food-qty" data-d="${step}" aria-label="More ${esc(units)}">+</button>
           </div>
         </div>
-        <p class="food-total" id="food-total">${foodTotal(f, ui.foodQty)}</p>
+        <p class="food-total" id="food-total">${foodTotal(f, foodServings())}</p>
         <label>Meal<select id="food-meal">${MEAL_TYPES.map((t) => `<option ${t === type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <button class="btn primary block" data-action="food-add">Add to ${ui.date === today() ? 'today' : L.fmtDate(ui.date)}</button>
         ${f.src === 'mine' ? '<button class="link small block-link" data-action="product-edit">✏️ Edit this product</button>' : ''}`;
@@ -1388,13 +1404,14 @@
             <label>Calories (kcal)<input name="cal" type="number" inputmode="numeric" min="0" max="5000" step="1" required value="${d.cal ?? ''}"></label>
             <label>Protein (g)<input name="protein" type="number" inputmode="decimal" min="0" max="500" step="0.1" required value="${d.protein ?? ''}"></label>
           </div>
-          <p class="muted small">Copy them from the nutrition label, per serving.${d.code ? ` Barcode ${esc(d.code)}.` : ''}</p>
+          <p class="muted small">Copy them from the nutrition label, per serving. Write a countable serving like “3 biscuits (34 g)” to log it by the piece later.${d.code ? ` Barcode ${esc(d.code)}.` : ''}</p>
           <button class="btn primary">Save product</button>
           ${d.id ? `<button type="button" class="link danger small" data-action="product-del" data-id="${esc(d.id)}">Delete this product</button>` : ''}
         </form>`;
     }
     const cats = FOOD_GROUPS[ui.foodGroup][1];
     return `<div class="sheet-head"><h2>Foods & brands</h2>${close}</div>
+      ${ui.foodNote ? `<p class="lead-note">${ui.foodNote}</p>` : ''}
       <input class="search" type="search" id="food-search" value="${esc(ui.foodQuery)}" placeholder="Search ${FOOD_LIST.length} foods: roti, Dairy Milk, whey…" autocomplete="off" enterkeyhint="search">
       <div class="row food-tools">
         <button class="btn small grow" data-action="food-scan">📷 Scan barcode</button>
@@ -1406,24 +1423,68 @@
       <p class="muted small">Typical values: home-style for Indian food, label values for packaged food. Recipes change, so check your pack, or scan it for the exact label.</p>`;
   }
 
-  // ---------- Online foods (Open Food Facts) ----------
-  const OFF_FIELDS = 'code,product_name,brands,serving_size,serving_quantity,quantity,nutriments';
+  // ---------- Online foods (Open Food Facts, then USDA FoodData Central) ----------
+  const OFF_FIELDS = 'code,product_name,product_name_en,generic_name,brands,serving_size,serving_quantity,quantity,nutriments';
+  // USDA's public demo key: limited per phone (IP), so it's only asked when Open Food Facts can't help.
+  const USDA_SEARCH = 'https://api.nal.usda.gov/fdc/v1/foods/search?api_key=DEMO_KEY&dataType=Branded';
+  const complete = (f) => !!f && f.cal != null && f.protein != null;
 
-  // Indian listings first, then worldwide. { status: 'done' | 'error', items }
+  // fetch → { ok, json }, given up after 15 s or when `signal` aborts.
+  async function getJson(url, signal) {
+    const ctrl = new AbortController();
+    const stop = () => ctrl.abort();
+    signal?.addEventListener('abort', stop);
+    const timer = setTimeout(stop, 15000);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      return { ok: res.ok, json: await res.json() };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
+    }
+  }
+
+  // Indian listings first, then worldwide. { status: 'done' | 'error' | 'aborted', items }
+  // A new search cancels the one still running; finished searches are remembered for the session.
+  const webCache = new Map();
+  let webCtrl = null;
   async function searchFoodsOnline(q) {
+    const key = q.trim().toLowerCase();
+    if (webCache.has(key)) return { status: 'done', items: webCache.get(key) };
+    webCtrl?.abort();
+    const ctrl = (webCtrl = new AbortController());
     try {
       let items = [];
       for (const host of ['in', 'world']) {
-        const res = await fetch(`https://${host}.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=24&fields=${OFF_FIELDS}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        items = ((await res.json()).products || []).map(L.offFood).filter(Boolean);
+        const { ok, json } = await getJson(`https://${host}.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=24&fields=${OFF_FIELDS}`, ctrl.signal);
+        if (!ok) throw new Error('search failed');
+        items = (json.products || []).map(L.offFood).filter(Boolean);
         if (items.length) break;
       }
-      items.sort((a, b) => (a.cal == null) - (b.cal == null)); // complete labels first
+      items.sort((a, b) => complete(b) - complete(a)); // complete labels first
+      webCache.set(key, items);
       return { status: 'done', items };
     } catch (e) {
-      return { status: 'error', items: [] };
+      return { status: ctrl.signal.aborted ? 'aborted' : 'error', items: [] };
     }
+  }
+
+  // Open Food Facts by barcode, trying each way the code can be written (UPC-A / EAN-13 / UPC-E).
+  // → { food, failed }: food is null when no listing has it; failed when the database couldn't be reached.
+  async function offByBarcode(code) {
+    const tries = await Promise.allSettled(L.barcodeVariants(code).map((c) =>
+      getJson(`https://world.openfoodfacts.org/api/v2/product/${c}.json?fields=${OFF_FIELDS}`))); // "not found" is a 404 with { status: 0 }
+    const hit = tries.find((t) => t.status === 'fulfilled' && t.value.json?.status === 1);
+    if (hit) return { food: L.offFood({ ...hit.value.json.product, code }), failed: false };
+    return { food: null, failed: tries.every((t) => t.status === 'rejected') };
+  }
+
+  // USDA's branded foods (mostly US and imported products, e.g. protein powders and bars).
+  async function usdaByBarcode(code) {
+    const { ok, json } = await getJson(`${USDA_SEARCH}&pageSize=3&query=${L.gtin14(code)}`);
+    if (!ok) throw new Error('USDA lookup failed');
+    const item = (json.foods || []).find((x) => L.gtin14(x.gtinUpc) === L.gtin14(code));
+    return item ? L.usdaFood({ ...item, gtinUpc: code }) : null;
   }
 
   function refreshFoodList() {
@@ -1433,7 +1494,9 @@
 
   function showFood(f) {
     ui.foodPick = f;
-    ui.foodQty = 1;
+    ui.foodPieces = L.pieceInfo(f.serving);
+    ui.foodUnit = ui.foodPieces ? 'piece' : 'serving';
+    ui.foodQty = ui.foodPieces ? ui.foodPieces.count : 1; // one serving's worth to start
     ui.foodView = 'pick';
     openSheet(foodSheet());
   }
@@ -1460,7 +1523,7 @@
     const status = (msg) => { const el = $('#scan-status'); if (el) el.textContent = msg; };
     if (!GymScan.supported()) return status('This browser can\'t use the camera. Type the barcode number instead.');
     try {
-      await GymScan.start($('#scan-video'), lookupBarcode);
+      await GymScan.start($('#scan-video'), lookupBarcode, L.barcodeValid);
       status('Point the camera at the barcode on the pack.');
     } catch (e) {
       status(e?.name === 'NotAllowedError'
@@ -1469,28 +1532,47 @@
     }
   }
 
-  // Your saved products first (works offline), then Open Food Facts. Anything missing → fill from the label.
+  // Your saved products first (works offline), then Open Food Facts, then USDA. A product found
+  // without calories is searched by name, so you can pick the closest match. Else: fill from the label.
   async function lookupBarcode(code) {
-    const mine = me().products.find((x) => x.code === code);
+    const mine = me().products.find((x) => x.code && L.gtin14(x.code) === L.gtin14(code));
     if (mine) return showFood({ ...mine, src: 'mine' });
-    const status = $('#scan-status');
-    if (status) status.textContent = `Looking up ${code}…`;
-    let food = null;
-    let failed = false;
-    try {
-      const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=${OFF_FIELDS}`);
-      const j = await res.json(); // "not found" is a 404 with { status: 0 }
-      if (j.status === 1) food = L.offFood({ ...j.product, code });
-    } catch (e) {
-      failed = true;
+    const sheetOpen = () => isSheetOpen() && ui.foodView === 'scan';
+    const status = (msg) => { const el = $('#scan-status'); if (el) el.textContent = msg; };
+    status(`Looking up ${code}…`);
+    let { food, failed } = await offByBarcode(code);
+    if (!complete(food)) {
+      if (sheetOpen()) status(food ? `Found ${foodName(food)}. Looking for its calories…` : 'Not in Open Food Facts. Checking the USDA database…');
+      try {
+        const usda = await usdaByBarcode(code);
+        if (complete(usda) || !food) food = usda;
+        failed = false;
+      } catch (e) { /* offline, or USDA's demo limit is used up */ }
     }
-    if ($('#sheet').hidden) return;
+    if (!sheetOpen()) return;
     buzz(20);
-    if (food && food.cal != null && food.protein != null) return showFood({ ...food, src: 'web' });
+    if (complete(food)) return showFood({ ...food, src: 'web' });
+    if (food) {
+      // Same product (or its closest match) from a name search; picking one saves it under this barcode.
+      const short = food.name.replace(/\b\d+([.,]\d+)?\s*(g|gm|grm|gms|kg|ml|l|ltr|pc|pcs)\b/gi, ' ').split(/\s+/).filter(Boolean).slice(0, 5).join(' ');
+      const q = foodName({ ...food, name: short });
+      status(`Found ${foodName(food)}. Searching for its calories…`);
+      const result = await searchFoodsOnline(q);
+      if (!sheetOpen()) return;
+      const items = result.items.filter(complete).map((x) => ({ ...x, code }));
+      if (items.length) {
+        ui.foodView = 'list';
+        ui.foodQuery = q;
+        ui.web = { q, status: 'done', items };
+        ui.foodNote = `Barcode ${esc(code)} is <b>${esc(foodName(food))}</b>, but its label isn't on file. Pick the matching product below (it's saved for next time), or <button class="link" data-action="barcode-label" data-code="${esc(code)}">add it from the label</button>.`;
+        ui.barcodeFood = food;
+        return openSheet(foodSheet());
+      }
+    }
     editProduct({ ...food, code }, failed
       ? 'Couldn\'t reach the food database. Add the product from its label once and it\'s saved for next time.'
       : food ? `Found <b>${esc(foodName(food))}</b>, but without calories or protein on file. Copy them from the label once and it's saved for next time.`
-        : 'This barcode isn\'t in the food database yet. Add it from the label once and it\'s saved for next time.');
+        : `Barcode ${esc(code)} isn't in Open Food Facts or the USDA database yet. Search its name in Foods & brands, or add it from the label once and it's saved for next time.`);
   }
 
   function suppListHtml(p, q) {
@@ -1551,21 +1633,125 @@
       </form>`;
   }
 
+  // The sheet slides up when it opens (CSS) and slides down before it hides. Re-filling an open
+  // sheet (e.g. moving through the food screens) swaps its content without animating again.
+  let sheetTimer = null;
+  const isSheetOpen = () => !$('#sheet').hidden && !$('#sheet').classList.contains('closing');
   function openSheet(html) {
     GymScan.stop();
     const s = $('#sheet');
+    clearTimeout(sheetTimer);
+    s.classList.remove('closing', 'dragging');
+    s.firstElementChild.classList.remove('settle');
+    s.firstElementChild.style.transform = '';
     s.firstElementChild.innerHTML = html;
     s.hidden = false;
     document.body.classList.add('no-scroll');
   }
   function closeSheet() {
     GymScan.stop();
-    $('#sheet').hidden = true;
+    const s = $('#sheet');
+    if (!isSheetOpen()) return;
     document.body.classList.remove('no-scroll');
+    const fast = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    s.classList.add('closing');
+    sheetTimer = setTimeout(() => {
+      s.hidden = true;
+      s.classList.remove('closing', 'dragging');
+      s.firstElementChild.style.transform = '';
+    }, fast ? 0 : 260);
+  }
+
+  // Drag the top of a sheet (grabber or title row) down to close it, like a phone's own sheets.
+  function initSheetDrag() {
+    const s = $('#sheet');
+    const sheet = s.firstElementChild;
+    let drag = null;
+    sheet.addEventListener('pointerdown', (e) => {
+      if (e.button || !isSheetOpen() || e.target.closest('button, input, select, textarea, a, label')) return;
+      const nearTop = e.clientY - sheet.getBoundingClientRect().top < 34;
+      if (!nearTop && !e.target.closest('.sheet-head')) return;
+      drag = { id: e.pointerId, y0: e.clientY, t0: e.timeStamp, dy: 0 };
+      s.classList.add('dragging');
+      sheet.classList.remove('settle');
+      sheet.setPointerCapture(e.pointerId);
+    });
+    sheet.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      drag.dy = Math.max(0, e.clientY - drag.y0);
+      sheet.style.transform = `translateY(${drag.dy}px)`;
+    });
+    const end = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const { dy, t0 } = drag;
+      drag = null;
+      const flick = dy > 30 && dy / Math.max(1, e.timeStamp - t0) > 0.6;
+      if (dy > 120 || flick) {
+        // Carry on from where the finger let go.
+        sheet.classList.add('settle');
+        sheet.style.transform = 'translateY(100%)';
+        s.classList.add('closing');
+        s.classList.remove('dragging');
+        sheet.style.animation = 'none';
+        document.body.classList.remove('no-scroll');
+        GymScan.stop();
+        clearTimeout(sheetTimer);
+        sheetTimer = setTimeout(() => {
+          s.hidden = true;
+          s.classList.remove('closing');
+          sheet.classList.remove('settle');
+          sheet.style.transform = sheet.style.animation = '';
+        }, 300);
+      } else {
+        s.classList.remove('dragging');
+        sheet.classList.add('settle');
+        sheet.style.transform = '';
+      }
+    };
+    sheet.addEventListener('pointerup', end);
+    sheet.addEventListener('pointercancel', end);
   }
 
   // ---------- Render ----------
   const VIEWS = { today: todayView, diet: dietView, workout: workoutView, progress: progressView, supps: suppsView, more: moreView };
+  const TAB_ORDER = Object.keys(VIEWS); // same order as the dock
+
+  // Once the big page title scrolls under the top bar, the bar shows it in small (One UI style).
+  let titleWatch = null;
+  function watchTitle() {
+    titleWatch?.disconnect();
+    const h = $('#view .page-title');
+    const body = document.body;
+    body.classList.toggle('has-title', !!h);
+    $('#bar-title').textContent = !h ? '' : ui.tab === 'today' ? 'Today' : h.firstChild.textContent.trim();
+    if (!h || !('IntersectionObserver' in window)) return body.classList.toggle('scrolled', scrollY > 8);
+    const top = $('.topbar').offsetHeight;
+    titleWatch = new IntersectionObserver(([e]) => body.classList.toggle('scrolled', !e.isIntersecting), { rootMargin: `-${top}px 0px 0px 0px` });
+    titleWatch.observe(h);
+  }
+
+  // Switching tabs: slide toward the new tab where the browser can (View Transitions), else fade the cards in.
+  function switchTab(tab) {
+    const dir = TAB_ORDER.indexOf(tab) < TAB_ORDER.indexOf(ui.tab) ? 'back' : 'fwd';
+    const go = () => {
+      ui.tab = tab;
+      ui.date = today();
+      ui.openEx = null;
+      render();
+      window.scrollTo(0, 0);
+    };
+    const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (document.startViewTransition && !calm) {
+      document.documentElement.dataset.dir = dir;
+      document.startViewTransition(go);
+      return;
+    }
+    go();
+    if (calm) return;
+    const view = $('#view');
+    view.classList.add('view-enter');
+    setTimeout(() => view.classList.remove('view-enter'), 650);
+  }
 
   function render() {
     const p = me();
@@ -1581,11 +1767,13 @@
     } else {
       chip.innerHTML = chipHtml(p);
       document.querySelectorAll('#tabs [data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
+      $('#tabs').style.setProperty('--i', TAB_ORDER.indexOf(ui.tab));
       $('#view').innerHTML = VIEWS[ui.tab](p);
       // Re-check friends when their info is on screen; sooner on Workout when syncing someone.
       const maxAge = ui.tab === 'workout' && p.follow ? 15000 : 60000;
       if ((ui.tab === 'today' || ui.tab === 'workout') && p.friends.length && Date.now() - ui.friendsAt > maxAge) pollFriends();
     }
+    watchTitle();
     updateLive(false);
     updateRest();
     updateWakeLock();
@@ -2043,7 +2231,7 @@
     });
     save(false);
     if (L.hashOf(result) !== L.hashOf(merged)) queueSync(1500); // edits made while syncing
-    if (changedHere && !isTyping() && $('#sheet').hidden) render();
+    if (changedHere && !isTyping() && !isSheetOpen()) render();
     return true;
   }
 
@@ -2259,7 +2447,7 @@
     if (!GymNative.isNative) return;
     ui.nativeNotif = nativePerm(await GymNative.notifPermission(false));
     queueNativeReminders(true);
-    if (!isTyping() && $('#sheet').hidden) render();
+    if (!isTyping() && !isSheetOpen()) render();
   }
 
   // Runs every 30 s; each reminder fires once.
@@ -2308,7 +2496,7 @@
 
     if (changed) {
       save();
-      if (!isTyping() && $('#sheet').hidden) render();
+      if (!isTyping() && !isSheetOpen()) render();
     }
   }
 
@@ -2421,11 +2609,8 @@
   // ---------- Event handling ----------
   const ACTIONS = {
     tab(el) {
-      ui.tab = el.dataset.tab;
-      ui.date = today();
-      ui.openEx = null;
-      render();
-      window.scrollTo(0, 0);
+      if (el.dataset.tab !== ui.tab) buzz(8);
+      switchTab(el.dataset.tab);
     },
     day(el) {
       const d = L.addDays(ui.date, +el.dataset.n);
@@ -2569,14 +2754,18 @@
     },
     'open-foods'() {
       ui.foodView = 'list';
-      ui.foodQuery = '';
+      ui.foodQuery = ui.foodNote = '';
       openSheet(foodSheet());
     },
     'food-group'(el) {
       ui.foodGroup = el.dataset.g;
       ui.foodCat = 'All';
-      ui.foodQuery = '';
+      ui.foodQuery = ui.foodNote = '';
       openSheet(foodSheet());
+    },
+    'barcode-label'(el) {
+      ui.foodNote = '';
+      editProduct({ ...ui.barcodeFood, code: el.dataset.code }, 'Copy the calories and protein from the label, per serving. It\'s saved for next time.');
     },
     'food-cat'(el) {
       ui.foodCat = el.dataset.c;
@@ -2595,12 +2784,13 @@
       openSheet(foodSheet());
     },
     async 'food-web'() {
+      clearTimeout(webTimer);
       const q = ui.foodQuery.trim();
-      if (q.length < 2 || (ui.web?.q === q && ui.web.status === 'loading')) return;
+      if (q.length < 2 || (ui.web?.q === q && ui.web.status !== 'error')) return;
       ui.web = { q, status: 'loading', items: [] };
       refreshFoodList();
       const result = await searchFoodsOnline(q);
-      if (ui.web?.q !== q) return; // a newer search started
+      if (ui.web?.q !== q || result.status === 'aborted') return; // a newer search started
       ui.web = { q, ...result };
       refreshFoodList();
     },
@@ -2682,20 +2872,32 @@
       openSheet(foodSheet());
     },
     'food-qty'(el) {
-      const step = qtyStep(ui.foodPick);
-      ui.foodQty = L.round2(Math.max(step, Math.min(20, ui.foodQty + +el.dataset.d)));
+      const step = byPiece() ? 1 : qtyStep(ui.foodPick);
+      ui.foodQty = L.round2(Math.max(step, Math.min(byPiece() ? 200 : 20, ui.foodQty + +el.dataset.d)));
       $('#food-qty').textContent = ui.foodQty;
-      $('#food-total').innerHTML = foodTotal(ui.foodPick, ui.foodQty);
+      $('#food-total').innerHTML = foodTotal(ui.foodPick, foodServings());
       buzz(8);
+    },
+    'food-unit'(el) {
+      const u = el.dataset.u;
+      if (u === ui.foodUnit || !ui.foodPieces) return;
+      const { count } = ui.foodPieces;
+      const step = qtyStep(ui.foodPick);
+      // Keep the same amount: 4 biscuits ⇄ 1.5 servings (rounded to the nearest step).
+      ui.foodQty = u === 'piece' ? Math.max(1, Math.round(ui.foodQty * count)) : Math.max(step, L.round2(Math.round(ui.foodQty / count / step) * step));
+      ui.foodUnit = u;
+      const meal = $('#food-meal')?.value;
+      openSheet(foodSheet());
+      if (meal) $('#food-meal').value = meal;
     },
     'food-add'() {
       const f = ui.foodPick;
-      const q = ui.foodQty;
+      const q = foodServings();
       const type = $('#food-meal').value;
       if (f.src === 'web') saveProduct(me(), f);
       closeSheet();
       addMeal({
-        name: `${foodName(f)} · ${q === 1 ? f.serving : `${q} × ${f.serving}`}`,
+        name: `${foodName(f)} · ${byPiece() ? pieceText(ui.foodQty, ui.foodPieces) : q === 1 ? f.serving : `${q} × ${f.serving}`}`,
         cal: Math.round(f.cal * q),
         protein: L.round2(f.protein * q),
         type,
@@ -3166,7 +3368,11 @@
       $('#ex-list').innerHTML = pickListHtml(me(), t.value);
     } else if (t.id === 'food-search') {
       ui.foodQuery = t.value;
+      if (ui.foodNote) { ui.foodNote = ''; $('#sheet .lead-note')?.remove(); }
       refreshFoodList();
+      // Live online search: waits for a pause in typing, so each word doesn't start a request.
+      clearTimeout(webTimer);
+      if (t.value.trim().length >= WEB_MIN) webTimer = setTimeout(() => ACTIONS['food-web'](), 600);
     } else if (t.id === 'supp-search') {
       $('#supp-list').innerHTML = suppListHtml(me(), t.value);
     } else if (form === 'set' && t.name === 'w') {
@@ -3221,8 +3427,8 @@
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet();
-    // The keyboard's search key looks the food up online too.
+    if (e.key === 'Escape' && isSheetOpen()) closeSheet();
+    // The keyboard's search key looks the food up online right away.
     if (e.key === 'Enter' && e.target.id === 'food-search') {
       e.target.blur();
       ACTIONS['food-web']();
@@ -3259,7 +3465,7 @@
     if (typeof schedulePwaTriggers === 'function') schedulePwaTriggers();
     syncTick();
     queueNativeReminders();
-    if (!isTyping() && $('#sheet').hidden) render();
+    if (!isTyping() && !isSheetOpen()) render();
     else updateWakeLock();
   });
 
@@ -3279,6 +3485,7 @@
   });
 
   if (db.restRun && db.restRun.end < Date.now() - 3000) db.restRun = null;
+  initSheetDrag();
   render();
   if (db.restRun) {
     restTick = setInterval(updateRest, 250);

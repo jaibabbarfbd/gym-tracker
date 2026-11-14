@@ -106,7 +106,7 @@
   // otherwise per 100 g (or 100 ml). cal / protein are null when the database doesn't have them,
   // so the person can copy them from the pack. Returns null for products without a name.
   function offFood(prod) {
-    const name = (prod?.product_name || '').trim().slice(0, 60);
+    const name = (prod?.product_name || prod?.product_name_en || prod?.generic_name || '').trim().slice(0, 60);
     if (!name) return null;
     const n = prod.nutriments || {};
     const grams = prod.serving_size && +prod.serving_quantity > 0 ? +prod.serving_quantity : 0;
@@ -129,7 +129,103 @@
       cal: ok(cal) ? Math.round(cal) : null,
       protein: ok(protein) ? round2(protein) : null,
       code: String(prod.code || ''),
+      source: 'Open Food Facts',
     };
+  }
+
+  // Things a serving can be counted in: [one, many].
+  const PIECE_WORDS = [
+    ['biscuit', 'biscuits'], ['cookie', 'cookies'], ['piece', 'pieces'], ['bar', 'bars'], ['slice', 'slices'],
+    ['square', 'squares'], ['finger', 'fingers'], ['wafer', 'wafers'], ['candy', 'candies'], ['toffee', 'toffees'],
+    ['chocolate', 'chocolates'], ['kiss', 'kisses'], ['lollipop', 'lollipops'], ['egg', 'eggs'], ['white', 'whites'],
+    ['nugget', 'nuggets'], ['half', 'halves'], ['date', 'dates'], ['cube', 'cubes'], ['ball', 'balls'], ['roll', 'rolls'],
+    ['stick', 'sticks'], ['cone', 'cones'], ['burger', 'burgers'], ['can', 'cans'], ['bottle', 'bottles'], ['pack', 'packs'],
+    ['scoop', 'scoops'], ['tablet', 'tablets'], ['tbsp', 'tbsp'], ['tsp', 'tsp'],
+  ];
+  const PIECE_ALIASES = { pc: 'piece', pcs: 'piece' };
+
+  // How a serving can be counted: "3 biscuits (34 g)" → { count: 3, one: 'biscuit', many: 'biscuits', size: 11.33, unit: 'g' }
+  // (size = weight of one, when the serving gives it). null when the serving isn't a count ("100 g", "1 katori").
+  function pieceInfo(serving) {
+    const m = String(serving || '').toLowerCase().match(/^\s*(\d{1,3})\s+(?:(?:large|small|medium|mini|whole)\s+)?([a-z]+)\b/);
+    if (!m) return null;
+    const word = PIECE_ALIASES[m[2]] || m[2];
+    const pair = PIECE_WORDS.find(([one, many]) => word === one || word === many);
+    const count = +m[1];
+    if (!pair || !count) return null;
+    const w = String(serving).match(/(\d+(?:\.\d+)?)\s*(g|ml)\b/i);
+    return { count, one: pair[0], many: pair[1], size: w ? round2(+w[1] / count) : null, unit: w ? w[2].toLowerCase() : null };
+  }
+
+  // "CHEERIOS CEREAL" → "Cheerios Cereal"; mixed-case text is left alone.
+  const tidyCaps = (s) => (s && s === s.toUpperCase() ? s.toLowerCase().replace(/(^|[\s(/-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()) : s || '');
+
+  // A USDA FoodData Central "Branded" food as a food to log. Its nutrients are per 100 g (or ml).
+  function usdaFood(item) {
+    const name = tidyCaps((item?.description || '').trim()).slice(0, 60);
+    if (!name) return null;
+    const per100 = (...ids) => {
+      const n = (item.foodNutrients || []).find((x) => ids.includes(x.nutrientId) && x.value != null);
+      return n ? +n.value : null;
+    };
+    const unit = String(item.servingSizeUnit || '').toLowerCase();
+    const liquid = /^(ml|mlt)$/.test(unit);
+    const size = (liquid || /^(g|grm)$/.test(unit)) && +item.servingSize > 0 ? +item.servingSize : 0;
+    const scale = (v) => (v == null ? null : (v * (size || 100)) / 100);
+    const cal = scale(per100(1008, 2047, 2048));
+    const protein = scale(per100(1003));
+    const ok = (v) => v != null && isFinite(v) && v >= 0;
+    const house = String(item.householdServingFullText || '').trim();
+    const amount = `${round2(size)} ${liquid ? 'ml' : 'g'}`;
+    return {
+      name,
+      brand: tidyCaps(item.brandName || item.brandOwner || '').trim().slice(0, 40),
+      serving: (size ? (house && !/\d\s*(g|ml)\b/i.test(house) ? `${house} (${amount})` : house || amount) : liquid ? '100 ml' : '100 g').slice(0, 30),
+      cal: ok(cal) ? Math.round(cal) : null,
+      protein: ok(protein) ? round2(protein) : null,
+      code: String(item.gtinUpc || ''),
+      source: 'USDA',
+    };
+  }
+
+  // ---------- Barcodes (EAN-8, EAN-13, UPC-A, UPC-E, GTIN-14) ----------
+  // The GS1 check digit for the digits before it.
+  function gtinCheck(body) {
+    let sum = 0;
+    for (let i = 0; i < body.length; i++) sum += +body[body.length - 1 - i] * (i % 2 ? 1 : 3);
+    return (10 - (sum % 10)) % 10;
+  }
+
+  // UPC-E (8 digits, starts with 0 or 1) written out as the 12-digit UPC-A it stands for.
+  function upcEtoA(code) {
+    if (!/^[01]\d{7}$/.test(code)) return null;
+    const [n, a, b, c, d, e, f, check] = code;
+    const mid = f <= '2' ? `${a}${b}${f}0000${c}${d}${e}` : f === '3' ? `${a}${b}${c}00000${d}${e}` : f === '4' ? `${a}${b}${c}${d}00000${e}` : `${a}${b}${c}${d}${e}0000${f}`;
+    return n + mid + check;
+  }
+
+  // True when the check digit is right, so a camera misread isn't looked up.
+  function barcodeValid(code) {
+    code = String(code || '');
+    if (!/^(\d{8}|\d{12,14})$/.test(code)) return false;
+    if (gtinCheck(code.slice(0, -1)) === +code.slice(-1)) return true;
+    const a = code.length === 8 && upcEtoA(code);
+    return !!a && gtinCheck(a.slice(0, -1)) === +a.slice(-1);
+  }
+
+  // The same product written as a 14-digit GTIN (UPC-A, EAN-13 and EAN-8 are zero-padded).
+  const gtin14 = (code) => String(code || '').replace(/\D/g, '').padStart(14, '0');
+
+  // Every way the database might have this barcode on file, as typed first.
+  function barcodeVariants(code) {
+    code = String(code || '').replace(/\D/g, '');
+    const out = [code];
+    const a = code.length === 8 && barcodeValid(upcEtoA(code)) ? upcEtoA(code) : null;
+    if (a) out.push(a, `0${a}`);
+    if (code.length === 12) out.push(`0${code}`);
+    let c = code;
+    while (c.length > 12 && c[0] === '0') out.push((c = c.slice(1)));
+    return [...new Set(out)].filter((x) => x.length >= 8);
   }
 
   // ---------- Training ----------
@@ -687,7 +783,7 @@
   const api = {
     ...DATA, DAY_TYPES,
     ymd, parseYmd, addDays, addMonths, daysBetween, hmToMin, atTime, fmtDate, relDay, fmtClock, fmt12, fmtW, fmtL, fmtDur, parseDur, round2,
-    dayTotals, savedFoods, offFood,
+    dayTotals, savedFoods, offFood, usdaFood, pieceInfo, barcodeValid, upcEtoA, gtin14, barcodeVariants,
     exerciseCfg, isForTime, lastSession, overloadTargets, bestSet, bestTimed, repsAtWeight, e1rm, personalBests, compareSet,
     parseHeartRate, stepsTotal, nativeReminders,
     waterReminder, suppSlots, findTaken, membershipStatus, buildICS,

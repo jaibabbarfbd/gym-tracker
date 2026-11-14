@@ -11,7 +11,7 @@
       "iconColor": "#c8f53c"
     },
     "SystemBars": {
-      "style": "DARK",
+      "style": "DEFAULT",
       "initialViewportFitValueHint": "cover"
     }
   }

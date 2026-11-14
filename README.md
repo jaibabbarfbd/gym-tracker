@@ -6,7 +6,7 @@ A personal workout, diet, water, steps, supplement and gym-fee tracker, with fri
 
 - **Diet**: log meals with calories and protein against daily goals.
   - **Search foods & brands**: 188 Indian foods (roti, dal, paneer, biryani, South Indian, street food, sweets…) and 156 branded packaged foods: protein powders (ON, MuscleBlaze, Dymatize, MyProtein…), mass gainers, protein bars, Amul and Epigamia dairy, chocolates, chips & namkeen, biscuits, toffees and candy, cold drinks, spreads, cereals and noodles. Set the number of servings and it's logged with the calories and protein worked out.
-  - **🌐 Search every brand online** and **📷 Scan a barcode**: looks the product up in Open Food Facts with its label values per serving. If it isn't there (or has no calories on file), copy it from the label once.
+  - **🌐 Live online search** (starts as you type) and **📷 Scan a barcode**: looks the product up in Open Food Facts, then the USDA database, with label values per serving. If it's found without calories, matching products are searched by name; if it isn't anywhere, copy it from the label once.
   - **⭐ My products**: products you add or scan are saved for next time, offline too.
   - Or type any food in yourself. Foods you've logged before autofill and show up as one-tap "quick add" chips.
 - **Water**: +250 ml / +500 ml buttons against your daily goal.
@@ -86,7 +86,7 @@ Reminder notifications (water, supplements, gym fees, rest over) are switched of
 
 ## Your data
 
-Everything is saved in the browser on your phone (localStorage). If you sign in to an account, your logs are also backed up to it (see [FIREBASE.md](FIREBASE.md)). Online food search and barcode lookups go to Open Food Facts. Apart from that and the small friends status above, nothing is uploaded.
+Everything is saved in the browser on your phone (localStorage). If you sign in to an account, your logs are also backed up to it (see [FIREBASE.md](FIREBASE.md)). Online food search and barcode lookups go to Open Food Facts (barcodes it doesn't have also go to USDA FoodData Central). Apart from that and the small friends status above, nothing is uploaded.
 
 - **More → Export backup** saves a `.json` file of your data.
 - **More → Restore backup** replaces the app's data with a backup, e.g. on a new phone. The backup keeps your friend code and friends list, so friends stay connected. A password-protected backup asks for its password.

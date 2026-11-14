@@ -5,6 +5,7 @@
   "description": "Gym Tracker: workouts, diet, steps, supplements and friends' streaks. Web app + Android app (Capacitor).",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test test/*.test.js",
     "build": "node scripts/build-web.js",
     "android:sync": "npm run build && npx cap sync android"
   },

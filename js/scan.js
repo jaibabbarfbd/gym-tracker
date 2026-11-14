@@ -23,8 +23,16 @@
 
   const supported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
-  // Shows the back camera in `video` and calls onCode(code) once, with the first barcode it reads.
-  async function start(video, onCode) {
+  // Close-up barcodes need the camera to keep refocusing; not every phone lets a web page ask.
+  function autofocus(track) {
+    try {
+      if (track?.getCapabilities?.().focusMode?.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+    } catch (e) { /* the camera's default focus is used */ }
+  }
+
+  // Shows the back camera in `video` and calls onCode(code) once, with the first barcode it reads
+  // that passes accept(code) (used to skip misreads with a wrong check digit).
+  async function start(video, onCode, accept = () => true) {
     stop();
     const mine = run;
     const detector = await makeDetector();
@@ -32,13 +40,14 @@
     const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
     if (mine !== run) return s.getTracks().forEach((t) => t.stop());
     stream = s;
+    autofocus(s.getVideoTracks()[0]);
     video.srcObject = s;
     await video.play();
     const tick = async () => {
       if (mine !== run) return;
       try {
         const found = video.readyState >= 2 ? await detector.detect(video) : [];
-        const hit = found.find((b) => /^\d{8,14}$/.test(b.rawValue));
+        const hit = found.find((b) => /^\d{8,14}$/.test(b.rawValue) && accept(b.rawValue));
         if (hit && mine === run) {
           stop();
           return onCode(hit.rawValue);
